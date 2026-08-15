@@ -1,0 +1,19 @@
+experiment:
+  name: tesseract_crucible_k04
+
+data:
+  type: toy_copy
+  num_examples: 16
+  seq_len: 16
+  vocab_size: 16
+
+model:
+  config: prototype_small
+
+recursion:
+  k: 4
+
+training:
+  batch_size: 16
+  learning_rate: 0.0003
+  max_steps: 500

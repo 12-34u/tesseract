@@ -1,0 +1,25 @@
+# Python & Environment
+.venv/
+venv/
+ENV/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Pytest
+.pytest_cache/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# Experiment Tracking & Artifacts
+wandb/
+*.pt
+*.pth
+checkpoints/
+logs/
+
+# Environment Variables & OS
+.env
+.DS_Store
