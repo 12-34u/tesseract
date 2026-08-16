@@ -19,6 +19,7 @@ wandb/
 *.pth
 checkpoints/
 logs/
+runs/
 
 # Environment Variables & OS
 .env
