@@ -8,6 +8,7 @@ model:
 
 recursion:
   default_k: 4
+  alpha: 0.9
 
 training:
   learning_rate: 0.0003
