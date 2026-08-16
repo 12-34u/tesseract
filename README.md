@@ -1,6 +1,6 @@
 # Tesseract
 
-**Tesseract — Transformer Engineered for Sequential State Evaluation and Recursive Action**
+**Tesseract — Transformer Engineered for Sequential State Evaluation using Recursive Action**
 
 Tesseract is a research-oriented deep learning project exploring parameter-efficient recursive reasoning in transformer architectures. By reusing a single set of shared transformer block weights over configurable recursion steps ($K$) using dual latent states ($z_H$ and $z_L$) and Backpropagation Through Time (BPTT), Tesseract aims to evaluate whether dynamic computational depth can boost reasoning capability without increasing the trainable parameter count.
 
