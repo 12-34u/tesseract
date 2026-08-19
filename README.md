@@ -112,21 +112,34 @@ python scripts/run_all_experiments.py --skip-ca
 python scripts/viva_demo.py
 ```
 
-### Running the Evaluation Dashboard
+### Running the Evaluation Dashboard (GUI)
 
-1. **Start the FastAPI Backend Service:**
-   ```bash
-   PYTHONPATH=app/backend python -m uvicorn main:app --host 127.0.0.1 --port 8000
-   ```
+Before running, activate the Python virtual environment:
+```bash
+source .venv/bin/activate
+```
 
-2. **Start the React/Vite Frontend Dashboard:**
-   ```bash
-   cd app/frontend
-   npm install
-   npm run dev
-   ```
+#### Step 1: Start the FastAPI Backend Service
+```bash
+# From repository root:
+PYTHONPATH=app/backend python -m uvicorn main:app --host 127.0.0.1 --port 8000
+```
+*Alternatively:*
+```bash
+cd app/backend
+python -m uvicorn main:app --host 127.0.0.1 --port 8000
+```
 
-3. Open **`http://127.0.0.1:5173`** in your browser to view the interactive presentation dashboard.
+#### Step 2: Start the React/Vite Frontend Dashboard
+Open a second terminal window:
+```bash
+cd app/frontend
+npm install
+npm run dev
+```
+
+#### Step 3: View Dashboard
+Open **`http://127.0.0.1:5173`** in your browser to view the interactive presentation dashboard featuring parameter invariance charts, forward latency graphs, BPTT recursive gradient plots, $T \times K$ cellular automaton matrix, and presentation mode.
 
 ---
 
