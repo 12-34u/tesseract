@@ -112,6 +112,22 @@ python scripts/run_all_experiments.py --skip-ca
 python scripts/viva_demo.py
 ```
 
+### Running the Evaluation Dashboard
+
+1. **Start the FastAPI Backend Service:**
+   ```bash
+   PYTHONPATH=app/backend python -m uvicorn main:app --host 127.0.0.1 --port 8000
+   ```
+
+2. **Start the React/Vite Frontend Dashboard:**
+   ```bash
+   cd app/frontend
+   npm install
+   npm run dev
+   ```
+
+3. Open **`http://127.0.0.1:5173`** in your browser to view the interactive presentation dashboard.
+
 ---
 
 ## Repository Structure
