@@ -1,0 +1,46 @@
+============================================================
+  TESSERACT K-SCALING EXPERIMENT — SUMMARY
+============================================================
+
+  Research Question:
+    Does increasing K increase computational depth while
+    leaving trainable parameter count unchanged?
+
+  Answer: YES
+
+  Constant parameter count: 210,832
+  Device: cpu
+  Architecture: d_model=128, heads=4, d_ff=512
+
+  --------------------------------------------------
+     K |      Parameters |  Block Calls |   Latency (ms)
+  --------------------------------------------------
+     1 |         210,832 |            1 |           1.34
+     2 |         210,832 |            2 |           3.02
+     4 |         210,832 |            4 |           5.14
+     8 |         210,832 |            8 |           8.91
+  --------------------------------------------------
+
+  Training Results (copy task, same initial weights):
+  ----------------------------------------------------------
+     K |  Init Loss | Final Loss |  Tok Acc |   EM Acc |  Steps
+  ----------------------------------------------------------
+     1 |     3.2446 |   0.009999 |   100.0% |   100.0% |     84
+     2 |     4.3291 |   0.009769 |   100.0% |   100.0% |     55
+     4 |     8.3859 |   0.009971 |   100.0% |   100.0% |     32
+     8 |    28.3127 |   0.005342 |   100.0% |   100.0% |     29
+  ----------------------------------------------------------
+
+  Note: Loss/accuracy differences on the copy task are
+  secondary diagnostics, not evidence that recursion
+  improves reasoning. The copy task can be solved
+  without iterative reasoning.
+
+  Conclusion:
+    Tesseract decouples trainable parameter count from
+    recursive computation depth: the same 210,832 parameter
+    model can execute the shared transformer block 1, 2, 4,
+    or 8 times, increasing computation without introducing
+    additional trainable parameters.
+
+============================================================
