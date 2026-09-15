@@ -23,7 +23,7 @@ Example (Rule 90, T=2):
     Target: [1, 0, 0, 0, 1]
 """
 
-from typing import List, Literal, Tuple
+from typing import List, Tuple
 
 import torch
 from torch.utils.data import Dataset

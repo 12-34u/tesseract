@@ -1,0 +1,39 @@
+# K-scaling: does increasing recursive depth K increase computation while
+# keeping the trainable parameter count unchanged?
+# Part A benchmarks forward (inference) latency; Part B is an optional
+# full-batch training diagnostic on the copy task from identical initial weights.
+
+experiment:
+  name: k_scaling
+  output_dir: k_scaling
+  seed: 42
+  device: auto
+
+model:
+  base: prototype_small
+  overrides:
+    vocab_size: 16
+
+k_values: [1, 2, 4, 8]
+
+benchmark:
+  batch_size: 16
+  seq_len: 16
+  global_warmup_k: 4       # throwaway model used to warm caches before any timing
+  global_warmup_runs: 5
+  warmup_runs: 10          # per-K untimed forward passes
+  timing_runs: 30          # per-K timed forward passes
+
+training:
+  enabled: true
+  data:
+    task: copy
+    num_examples: 16
+    seq_len: 16
+  optimizer:
+    name: adamw
+    learning_rate: 0.0003
+    weight_decay: 0.01
+  max_steps: 200
+  early_stop_loss: 0.01
+  log_every: 50

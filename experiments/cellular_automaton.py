@@ -1,106 +1,67 @@
-"""Tesseract Cellular Automaton Experiment — Day 6.
+"""Tesseract Cellular Automaton experiment.
 
-Investigates whether increasing recursive computation depth K helps Tesseract
-perform a task that requires multiple sequential transformations (T).
+Task: predict the state of a 1D binary cellular automaton after T rule
+applications, given only the initial state.
 
-Task: Predict the state of a 1D binary cellular automaton (Rule 90) after
-T applications of the rule, given only the initial state.
+For each (T, K) in t_values × k_values a fresh model is trained from
+identical initial weights; train and validation accuracy are recorded.
 
-Experiment Matrix:
-    T ∈ {1, 2, 4, 8}   — required transformation depth
-    K ∈ {1, 2, 4, 8}   — model's recursive computation depth
-
-For each (T, K) combination:
-    - Train a fresh model from identical initial weights
-    - Record final loss, token accuracy, exact-match accuracy
-    - Verify parameter count remains constant
+Audit note: for Rule 90 with T a power of two, target_i = x[i-T] XOR x[i+T]
+exactly, so T in {1, 2, 4, 8} does not make targets depend on more input
+cells. The summary re-checks this identity on the generated data.
 
 Usage:
-    PYTHONPATH=. python experiments/cellular_automaton.py
+    python experiments/cellular_automaton.py [--config PATH] [--device auto|cpu|cuda] [--output-dir DIR]
 """
 
 import copy
 import csv
+import math
 import sys
-import time
 from pathlib import Path
-from typing import Any, Dict, List
-
-import yaml
-import torch
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import torch
+
 from data.toy_cellular_automaton import CellularAutomatonDataset, simulate_trajectory
+from evaluation.metrics import EvalResult, evaluate, token_errors_per_sequence
+from experiments.common import parse_setup
 from models.tesseract import TesseractModel
+from training.trainer import build_optimizer, train_step
+from utils.config import CATrainingConfig, CellularAutomatonConfig
 from utils.param_count import count_parameters
+from utils.run_artifacts import RunRecorder
 from utils.seed import set_seed
 
-try:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import matplotlib.colors as mcolors
-    HAS_MATPLOTLIB = True
-except ImportError:
-    HAS_MATPLOTLIB = False
+ARTIFACTS = [
+    "results.csv",
+    "train_em_heatmap.png",
+    "val_em_heatmap.png",
+    "val_token_acc_heatmap.png",
+    "loss_heatmap.png",
+    "accuracy_vs_k.png",
+    "summary.txt",
+    "predictions",  # directory: real validation predictions per (T, K)
+    "examples",     # directory: ground-truth simulator trajectories per T
+]
+NUM_EXAMPLES_SHOWN = 4  # display only
+OBSERVATION_MARGIN = 5.0  # percentage points: summary wording threshold only
 
-# ============================================================================
-# Configuration
-# ============================================================================
-
-SEED = 42
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
-# Task
-RULE_NUMBER = 90
-SEQ_LEN = 32  # Use 32 to avoid periodic collapse at T=8 (length-16 collapses to all-zeros)
-VOCAB_SIZE = 2  # Binary: {0, 1}
-
-# T and K values
-T_VALUES = [1, 2, 4, 8]
-K_VALUES = [1, 2, 4, 8]
-
-# Dataset
-NUM_TRAIN = 256
-NUM_VAL = 64
-
-# Model (prototype — same architecture as Crucible/K-scaling)
-D_MODEL = 128
-NUM_HEADS = 4
-D_FF = 512
-MAX_SEQ_LEN = 64
-ALPHA = 0.9
-DROPOUT = 0.0
-
-# Training
-LEARNING_RATE = 1e-3
-MAX_STEPS = 2000
-EARLY_STOP_LOSS = 0.005
-BATCH_SIZE = 64
-LOG_EVERY = 200
-
-# Output
-RUN_DIR = Path("runs/cellular_automaton")
-
-
-# ============================================================================
-# Model Creation
-# ============================================================================
-
-
-def create_model(k: int) -> TesseractModel:
-    """Create a TesseractModel for the binary CA task."""
-    return TesseractModel(
-        vocab_size=VOCAB_SIZE,
-        d_model=D_MODEL,
-        num_heads=NUM_HEADS,
-        d_ff=D_FF,
-        max_seq_len=MAX_SEQ_LEN,
-        num_recursive_steps=k,
-        alpha=ALPHA,
-        dropout=DROPOUT,
-    )
+CSV_FIELDS = [
+    "T", "K", "parameter_count",
+    "initial_loss", "final_loss",
+    "train_token_accuracy", "train_exact_match",
+    "val_token_accuracy", "val_exact_match",
+    "best_val_exact_match", "training_steps",
+    "stopped_reason", "eval_step",
+    "val_mean_token_errors", "val_min_token_errors",
+]
 
 
 # ============================================================================
@@ -108,99 +69,85 @@ def create_model(k: int) -> TesseractModel:
 # ============================================================================
 
 
-def train_model(
+def train_cell(
     model: TesseractModel,
     train_inputs: torch.Tensor,
     train_targets: torch.Tensor,
     val_inputs: torch.Tensor,
     val_targets: torch.Tensor,
-    t: int,
-    k: int,
-) -> Dict[str, Any]:
-    """Train a model on a single (T, K) configuration.
+    tc: CATrainingConfig,
+) -> Tuple[Dict[str, Any], Optional[EvalResult]]:
+    """Train one (T, K) cell.
 
-    Returns dict with metrics.
+    Mini-batches are sampled with replacement from the global CPU torch RNG
+    (identical index stream on CPU and GPU). ``final_loss`` is the last
+    mini-batch loss. Train/val metrics are full-set eval-mode measurements
+    at the most recent evaluation point (``eval_step``). Evaluation points are:
+    steps 1..eval_first_steps, every eval_every steps, max_steps and the
+    early-stop step. ``best_val_exact_match`` is the maximum over those points.
     """
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
-
-    initial_loss = None
-    final_loss = None
-    final_tok_acc = 0.0
-    final_em_acc = 0.0
-    val_tok_acc = 0.0
-    val_em_acc = 0.0
-    best_val_em = 0.0
-    steps_done = 0
-
+    optimizer = build_optimizer(model, tc.optimizer)
     n_train = train_inputs.shape[0]
 
-    for step in range(1, MAX_STEPS + 1):
-        model.train()
-        optimizer.zero_grad()
+    initial_loss: Optional[float] = None
+    loss_val = float("nan")
+    train_eval: Optional[EvalResult] = None
+    val_eval: Optional[EvalResult] = None
+    eval_step: Optional[int] = None
+    best_val_em: Optional[float] = None
+    stopped_reason = "max_steps"
 
-        # Mini-batch sampling
-        if n_train > BATCH_SIZE:
-            idx = torch.randint(0, n_train, (BATCH_SIZE,))
-            batch_inp = train_inputs[idx]
-            batch_tgt = train_targets[idx]
+    for step in range(1, tc.max_steps + 1):
+        if n_train > tc.batch_size:
+            idx = torch.randint(0, n_train, (tc.batch_size,)).to(train_inputs.device)
+            batch_inp, batch_tgt = train_inputs[idx], train_targets[idx]
         else:
-            batch_inp = train_inputs
-            batch_tgt = train_targets
+            batch_inp, batch_tgt = train_inputs, train_targets
 
-        logits, _ = model(batch_inp, return_states=False)
-        loss = model.compute_loss(logits, batch_tgt)
-        loss.backward()
-        optimizer.step()
-
-        loss_val = loss.item()
+        loss_val = train_step(model, batch_inp, batch_tgt, optimizer)["loss"]
         if initial_loss is None:
             initial_loss = loss_val
-        final_loss = loss_val
 
-        # Train accuracy (on full training set periodically)
-        if step <= 5 or step % LOG_EVERY == 0 or step == MAX_STEPS or loss_val < EARLY_STOP_LOSS:
-            model.eval()
-            with torch.no_grad():
-                full_logits, _ = model(train_inputs, return_states=False)
-                preds = full_logits.argmax(dim=-1)
-                final_tok_acc = (preds == train_targets).float().mean().item() * 100.0
-                final_em_acc = (preds == train_targets).all(dim=-1).float().mean().item() * 100.0
-
-                # Validation
-                val_logits, _ = model(val_inputs, return_states=False)
-                val_preds = val_logits.argmax(dim=-1)
-                val_tok_acc = (val_preds == val_targets).float().mean().item() * 100.0
-                val_em_acc = (val_preds == val_targets).all(dim=-1).float().mean().item() * 100.0
-                best_val_em = max(best_val_em, val_em_acc)
-
+        finite = math.isfinite(loss_val)
+        early_stop = loss_val < tc.early_stop_loss
+        if finite and (
+            step <= tc.eval_first_steps or step % tc.eval_every == 0 or step == tc.max_steps or early_stop
+        ):
+            train_eval = evaluate(model, train_inputs, train_targets)
+            val_eval = evaluate(model, val_inputs, val_targets)
+            eval_step = step
+            best_val_em = max(val_eval.exact_match_accuracy, best_val_em or 0.0)
             print(
                 f"      step {step:>4d} | loss={loss_val:.6f} | "
-                f"tok={final_tok_acc:.1f}% em={final_em_acc:.1f}% | "
-                f"val_tok={val_tok_acc:.1f}% val_em={val_em_acc:.1f}%"
+                f"tok={train_eval.token_accuracy:.1f}% em={train_eval.exact_match_accuracy:.1f}% | "
+                f"val_tok={val_eval.token_accuracy:.1f}% val_em={val_eval.exact_match_accuracy:.1f}%"
             )
 
-        steps_done = step
-
-        if loss_val < EARLY_STOP_LOSS:
+        if early_stop:
+            stopped_reason = "early_stop"
             print(f"      *** Early stop at step {step}: loss={loss_val:.6f} ***")
             break
-
-        if not torch.isfinite(torch.tensor(loss_val)):
-            print(f"      *** FAILURE: NaN/Inf at step {step} ***")
+        if not finite:
+            stopped_reason = "non_finite_loss"
+            print(f"      *** FAILURE: non-finite loss at step {step} ***")
             break
 
-    return {
-        "T": t,
-        "K": k,
+    val_errors = token_errors_per_sequence(val_eval.predictions, val_targets).float() if val_eval else None
+    metrics = {
         "initial_loss": initial_loss,
-        "final_loss": final_loss,
-        "train_token_accuracy": final_tok_acc,
-        "train_exact_match": final_em_acc,
-        "val_token_accuracy": val_tok_acc,
-        "val_exact_match": val_em_acc,
+        "final_loss": loss_val,
+        "train_token_accuracy": train_eval.token_accuracy if train_eval else None,
+        "train_exact_match": train_eval.exact_match_accuracy if train_eval else None,
+        "val_token_accuracy": val_eval.token_accuracy if val_eval else None,
+        "val_exact_match": val_eval.exact_match_accuracy if val_eval else None,
         "best_val_exact_match": best_val_em,
-        "training_steps": steps_done,
+        "training_steps": step,
+        "stopped_reason": stopped_reason,
+        "eval_step": eval_step,
+        "val_mean_token_errors": val_errors.mean().item() if val_errors is not None else None,
+        "val_min_token_errors": int(val_errors.min().item()) if val_errors is not None else None,
     }
+    return metrics, val_eval
 
 
 # ============================================================================
@@ -208,153 +155,161 @@ def train_model(
 # ============================================================================
 
 
-def run_experiment() -> List[Dict[str, Any]]:
-    """Run the full T×K experiment matrix."""
+def make_datasets(config: CellularAutomatonConfig, t: int) -> Tuple[CellularAutomatonDataset, CellularAutomatonDataset]:
+    d = config.data
+    seed = config.experiment.seed
+    train_ds = CellularAutomatonDataset(d.num_train, d.seq_len, d.rule_number, t, seed=seed)
+    val_ds = CellularAutomatonDataset(d.num_val, d.seq_len, d.rule_number, t, seed=seed + d.val_seed_offset)
+
+    train_set = {tuple(row) for row in train_ds.inputs.tolist()}
+    overlap = sum(tuple(row) in train_set for row in val_ds.inputs.tolist())
+    if overlap:
+        raise RuntimeError(f"T={t}: {overlap} validation initial states also appear in the training set")
+    return train_ds, val_ds
+
+
+def two_cell_xor_identity(dataset: CellularAutomatonDataset) -> bool:
+    """True if every target equals x[i-T] XOR x[i+T] (periodic)."""
+    t = dataset.steps
+    x = dataset.inputs
+    return torch.equal(dataset.targets, torch.roll(x, t, dims=1) ^ torch.roll(x, -t, dims=1))
+
+
+def run_experiment(config: CellularAutomatonConfig, device: torch.device, run: RunRecorder) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    d, tc, seed = config.data, config.training, config.experiment.seed
     print("\n" + "=" * 64)
     print("  CELLULAR AUTOMATON EXPERIMENT")
-    print("  Task: Predict Rule 90 after T steps")
+    print(f"  Task: predict Rule {d.rule_number} after T steps")
     print("=" * 64)
-    print(f"  Seed:       {SEED}")
-    print(f"  Device:     {DEVICE}")
-    print(f"  Rule:       {RULE_NUMBER}")
-    print(f"  Seq len:    {SEQ_LEN}")
-    print(f"  Train/Val:  {NUM_TRAIN}/{NUM_VAL}")
-    print(f"  T values:   {T_VALUES}")
-    print(f"  K values:   {K_VALUES}")
+    print(f"  Seed:       {seed}")
+    print(f"  Device:     {device}")
+    print(f"  Seq len:    {d.seq_len}")
+    print(f"  Train/Val:  {d.num_train}/{d.num_val} (val seed {seed + d.val_seed_offset})")
+    print(f"  T values:   {list(d.t_values)}")
+    print(f"  K values:   {list(config.k_values)}")
 
-    # Create base model and save initial state for controlled comparison
-    set_seed(SEED)
-    base_model = create_model(k=1).to(DEVICE)
-    base_state_dict = copy.deepcopy(base_model.state_dict())
+    set_seed(seed)
+    base_model = TesseractModel.from_config(config.model, 1).to(device)
+    base_state = copy.deepcopy(base_model.state_dict())
     param_count = count_parameters(base_model)["trainable"]
-    print(f"  Parameters: {param_count:,}")
     del base_model
 
-    # Verify parameter invariance upfront
     print("\n  --- Parameter Invariance Check ---")
-    param_counts = []
-    for k in K_VALUES:
-        m = create_model(k)
-        pc = sum(p.numel() for p in m.parameters() if p.requires_grad)
-        param_counts.append(pc)
-        print(f"    K={k} → {pc:,} parameters")
-        del m
-    assert len(set(param_counts)) == 1, (
-        f"PARAMETER INVARIANCE VIOLATED: {param_counts}"
-    )
-    print(f"    ✓ All K values: {param_counts[0]:,} parameters")
+    counts = {k: count_parameters(TesseractModel.from_config(config.model, k))["trainable"] for k in config.k_values}
+    for k, c in counts.items():
+        print(f"    K={k} → {c:,} parameters")
+    if set(counts.values()) != {param_count}:
+        raise RuntimeError(f"PARAMETER INVARIANCE VIOLATED: {counts}")
 
-    results: List[Dict[str, Any]] = []
+    examples_dir = run.path("examples")
+    predictions_dir = run.path("predictions")
+    examples_dir.mkdir()
+    predictions_dir.mkdir()
 
-    for t in T_VALUES:
-        print(f"\n{'='*64}")
-        print(f"  T = {t} (required transformation depth)")
-        print(f"{'='*64}")
+    rows: List[Dict[str, Any]] = []
+    identity: Dict[int, bool] = {}
+    for t in d.t_values:
+        print(f"\n{'=' * 64}\n  T = {t}\n{'=' * 64}")
+        set_seed(seed)
+        train_ds, val_ds = make_datasets(config, t)
+        if d.rule_number == 90:
+            identity[t] = two_cell_xor_identity(train_ds) and two_cell_xor_identity(val_ds)
+        save_ground_truth_examples(train_ds, examples_dir / f"examples_T{t}.txt")
 
-        # Create datasets for this T
-        set_seed(SEED)
-        train_ds = CellularAutomatonDataset(
-            num_examples=NUM_TRAIN,
-            seq_len=SEQ_LEN,
-            rule_number=RULE_NUMBER,
-            steps=t,
-            seed=SEED,
-        )
-        val_ds = CellularAutomatonDataset(
-            num_examples=NUM_VAL,
-            seq_len=SEQ_LEN,
-            rule_number=RULE_NUMBER,
-            steps=t,
-            seed=SEED + 1000,  # Different seed for validation
-        )
+        train_inputs, train_targets = train_ds.inputs.to(device), train_ds.targets.to(device)
+        val_inputs, val_targets = val_ds.inputs.to(device), val_ds.targets.to(device)
+        print(f"\n  Example (T={t}):\n    Input:  {train_ds.inputs[0].tolist()}\n    Target: {train_ds.targets[0].tolist()}")
 
-        train_inputs = train_ds.inputs.to(DEVICE)
-        train_targets = train_ds.targets.to(DEVICE)
-        val_inputs = val_ds.inputs.to(DEVICE)
-        val_targets = val_ds.targets.to(DEVICE)
-
-        # Show one example
-        print(f"\n  Example (T={t}):")
-        print(f"    Input:  {train_inputs[0].tolist()}")
-        print(f"    Target: {train_targets[0].tolist()}")
-
-        for k in K_VALUES:
+        for k in config.k_values:
             print(f"\n    --- T={t}, K={k} ---")
+            # Seed before building so every cell starts from the same RNG state
+            # (and therefore the same mini-batch index stream).
+            set_seed(seed)
+            model = TesseractModel.from_config(config.model, k).to(device)
+            model.load_state_dict(base_state, strict=True)
 
-            # Create model with same initial weights
-            set_seed(SEED)
-            model = create_model(k).to(DEVICE)
-            model.load_state_dict(base_state_dict, strict=True)
-
-            # Train
-            metrics = train_model(
-                model, train_inputs, train_targets,
-                val_inputs, val_targets, t, k,
-            )
-            metrics["parameter_count"] = param_count
-
-            results.append(metrics)
+            metrics, val_eval = train_cell(model, train_inputs, train_targets, val_inputs, val_targets, tc)
+            rows.append({"T": t, "K": k, "parameter_count": param_count, **metrics})
+            if val_eval is not None:
+                save_predictions(val_ds, val_eval.predictions.cpu(), predictions_dir / f"T{t}_K{k}.txt", k)
 
             print(
                 f"    Result: loss={metrics['final_loss']:.6f} "
-                f"train_em={metrics['train_exact_match']:.1f}% "
-                f"val_em={metrics['val_exact_match']:.1f}%"
+                f"train_em={_fmt_pct(metrics['train_exact_match'])} val_em={_fmt_pct(metrics['val_exact_match'])} "
+                f"val_tok={_fmt_pct(metrics['val_token_accuracy'])} ({metrics['stopped_reason']})"
             )
-
             del model
 
-    return results
+    facts = {"parameter_count": param_count, "train_val_overlap": 0, "two_cell_xor_identity": identity}
+    return rows, facts
 
 
 # ============================================================================
-# Visualization
+# Artifacts
 # ============================================================================
 
 
-def build_matrix(
-    results: List[Dict[str, Any]], metric_key: str
-) -> Dict:
-    """Build a T×K matrix from results."""
-    matrix = {}
-    for r in results:
-        t, k = r["T"], r["K"]
-        matrix[(t, k)] = r[metric_key]
-    return matrix
+def _fmt_pct(value: Optional[float]) -> str:
+    return "N/A" if value is None else f"{value:.1f}%"
 
 
-def plot_heatmap(
-    results: List[Dict[str, Any]],
-    metric_key: str,
-    title: str,
-    filepath: Path,
-    cmap: str = "RdYlGn",
-    vmin: float = 0.0,
-    vmax: float = 100.0,
-    fmt: str = ".1f",
-) -> None:
-    """Generate a T×K heatmap."""
-    if not HAS_MATPLOTLIB:
-        print(f"  ⚠ matplotlib not available — skipping {filepath.name}")
-        return
+def _bits(values: List[int]) -> str:
+    return "".join(str(v) for v in values)
 
-    matrix = build_matrix(results, metric_key)
 
-    t_vals = sorted(set(r["T"] for r in results))
-    k_vals = sorted(set(r["K"] for r in results))
+def save_ground_truth_examples(dataset: CellularAutomatonDataset, path: Path) -> None:
+    lines = [
+        f"Ground-truth simulator trajectories — Rule {dataset.rule_number}, T={dataset.steps}",
+        "(training-set examples; these are NOT model predictions)",
+        "=" * 50,
+    ]
+    for i in range(min(NUM_EXAMPLES_SHOWN, len(dataset))):
+        inp, _ = dataset[i]
+        lines.append(f"\nExample {i + 1}:")
+        for step_idx, state in enumerate(simulate_trajectory(inp.tolist(), dataset.rule_number, dataset.steps)):
+            label = f"t={step_idx}" + (" (target)" if step_idx == dataset.steps else "")
+            lines.append(f"  {label:<14} {_bits(state)}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    data = []
-    for t in t_vals:
-        row = []
-        for k in k_vals:
-            val = matrix.get((t, k), float("nan"))
-            row.append(val)
-        data.append(row)
+
+def save_predictions(dataset: CellularAutomatonDataset, predictions: torch.Tensor, path: Path, k: int) -> None:
+    lines = [
+        f"Validation predictions — Rule {dataset.rule_number}, T={dataset.steps}, K={k}",
+        "(model at the final evaluation point; '^' marks wrong tokens)",
+        "=" * 50,
+    ]
+    for i in range(min(NUM_EXAMPLES_SHOWN, len(dataset))):
+        inp, tgt = dataset[i]
+        pred = predictions[i]
+        wrong = (pred != tgt).tolist()
+        lines.append(f"\nExample {i + 1}: {sum(wrong)} wrong token(s)")
+        lines.append(f"  input:      {_bits(inp.tolist())}")
+        lines.append(f"  target:     {_bits(tgt.tolist())}")
+        lines.append(f"  prediction: {_bits(pred.tolist())}")
+        lines.append(f"  errors:     {''.join('^' if w else ' ' for w in wrong)}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def save_results_csv(rows: List[Dict[str, Any]], path: Path) -> None:
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"  CSV saved: {path}")
+
+
+def _matrix(rows: List[Dict[str, Any]], key: str) -> Tuple[List[int], List[int], Dict[Tuple[int, int], Optional[float]]]:
+    t_vals = sorted({r["T"] for r in rows})
+    k_vals = sorted({r["K"] for r in rows})
+    return t_vals, k_vals, {(r["T"], r["K"]): r[key] for r in rows}
+
+
+def plot_heatmap(rows, key: str, title: str, path: Path, cmap: str, vmin: float, vmax: float, fmt: str = ".1f") -> None:
+    t_vals, k_vals, matrix = _matrix(rows, key)
+    data = [[matrix.get((t, k)) if matrix.get((t, k)) is not None else float("nan") for k in k_vals] for t in t_vals]
 
     fig, ax = plt.subplots(figsize=(8, 6))
-
     im = ax.imshow(data, cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto")
-
-    # Labels
     ax.set_xticks(range(len(k_vals)))
     ax.set_xticklabels([str(k) for k in k_vals], fontsize=12)
     ax.set_yticks(range(len(t_vals)))
@@ -363,70 +318,41 @@ def plot_heatmap(
     ax.set_ylabel("Transformation Depth T", fontsize=13, fontweight="bold")
     ax.set_title(title, fontsize=14, fontweight="bold", pad=15)
 
-    # Annotate cells
+    midpoint = (vmin + vmax) / 2
     for i, t in enumerate(t_vals):
         for j, k in enumerate(k_vals):
-            val = matrix.get((t, k), float("nan"))
-            if not (val != val):  # not NaN
-                # Choose text color based on background
-                text_color = "white" if val < (vmin + vmax) / 2 else "black"
-                if cmap == "RdYlGn_r":
-                    text_color = "white" if val > (vmin + vmax) / 2 else "black"
-                ax.text(j, i, f"{val:{fmt}}", ha="center", va="center",
-                        fontsize=11, fontweight="bold", color=text_color)
-
-    # Diagonal annotation (K=T line)
-    for i, t in enumerate(t_vals):
-        for j, k in enumerate(k_vals):
+            val = matrix.get((t, k))
+            if val is None or not math.isfinite(val):
+                ax.text(j, i, "N/A", ha="center", va="center", fontsize=11, color="gray")
+                continue
+            dark = val > midpoint if cmap.endswith("_r") else val < midpoint
+            ax.text(j, i, f"{val:{fmt}}", ha="center", va="center", fontsize=11, fontweight="bold",
+                    color="white" if dark else "black")
             if t == k:
-                rect = plt.Rectangle(
-                    (j - 0.5, i - 0.5), 1, 1,
-                    linewidth=2.5, edgecolor="blue", facecolor="none",
-                    linestyle="--"
-                )
-                ax.add_patch(rect)
+                ax.add_patch(plt.Rectangle((j - 0.5, i - 0.5), 1, 1, linewidth=2.5, edgecolor="blue",
+                                           facecolor="none", linestyle="--"))
 
-    # Colorbar
-    cbar = fig.colorbar(im, ax=ax, shrink=0.8)
-    cbar.ax.tick_params(labelsize=10)
-
+    fig.colorbar(im, ax=ax, shrink=0.8).ax.tick_params(labelsize=10)
     fig.tight_layout()
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(filepath, dpi=150, bbox_inches="tight")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"  Plot saved: {filepath}")
+    print(f"  Plot saved: {path}")
 
 
-def plot_accuracy_vs_k_by_t(
-    results: List[Dict[str, Any]],
-    filepath: Path,
-) -> None:
-    """Line plot: accuracy vs K, one line per T value."""
-    if not HAS_MATPLOTLIB:
-        return
+def plot_accuracy_vs_k(rows: List[Dict[str, Any]], path: Path, rule_number: int) -> None:
+    t_vals, k_vals, train = _matrix(rows, "train_exact_match")
+    _, _, val = _matrix(rows, "val_exact_match")
+    colors = ["#E74C3C", "#F39C12", "#27AE60", "#3498DB", "#9B59B6", "#1ABC9C"]
 
-    t_vals = sorted(set(r["T"] for r in results))
-    k_vals = sorted(set(r["K"] for r in results))
-    colors = ["#E74C3C", "#F39C12", "#27AE60", "#3498DB"]
+    def series(matrix, t):
+        return [matrix.get((t, k)) if matrix.get((t, k)) is not None else float("nan") for k in k_vals]
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-
     for idx, t in enumerate(t_vals):
         color = colors[idx % len(colors)]
-        train_ems = []
-        val_ems = []
-        for k in k_vals:
-            for r in results:
-                if r["T"] == t and r["K"] == k:
-                    train_ems.append(r["train_exact_match"])
-                    val_ems.append(r["val_exact_match"])
-
-        ax1.plot(k_vals, train_ems, "o-", color=color, linewidth=2,
-                 markersize=8, label=f"T={t}")
-        ax2.plot(k_vals, val_ems, "s--", color=color, linewidth=2,
-                 markersize=8, label=f"T={t}")
-
-    for ax, title in [(ax1, "Train Exact Match (%)"), (ax2, "Val Exact Match (%)")]:
+        ax1.plot(k_vals, series(train, t), "o-", color=color, linewidth=2, markersize=8, label=f"T={t}")
+        ax2.plot(k_vals, series(val, t), "s--", color=color, linewidth=2, markersize=8, label=f"T={t}")
+    for ax, title in ((ax1, "Train Exact Match (%)"), (ax2, "Val Exact Match (%)")):
         ax.set_xlabel("Recursive Depth K", fontsize=12, fontweight="bold")
         ax.set_ylabel("Exact Match Accuracy (%)", fontsize=12)
         ax.set_title(title, fontsize=13, fontweight="bold")
@@ -434,264 +360,122 @@ def plot_accuracy_vs_k_by_t(
         ax.set_ylim(-5, 105)
         ax.legend(fontsize=10)
         ax.grid(True, alpha=0.3, linestyle="--")
-
-    fig.suptitle("Tesseract: K vs T on Cellular Automaton (Rule 90)",
-                 fontsize=15, fontweight="bold", y=1.02)
+    fig.suptitle(f"Tesseract: K vs T on Cellular Automaton (Rule {rule_number})", fontsize=15, fontweight="bold", y=1.02)
     fig.tight_layout()
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(filepath, dpi=150, bbox_inches="tight")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"  Plot saved: {filepath}")
+    print(f"  Plot saved: {path}")
 
 
-def save_predictions(
-    results: List[Dict[str, Any]],
-    dirpath: Path,
-) -> None:
-    """Save sample predictions for select (T,K) pairs."""
-    dirpath.mkdir(parents=True, exist_ok=True)
-
-    # Pick interesting pairs: T=K diagonal + corners
-    interesting = [(1, 1), (2, 2), (4, 4), (4, 1), (4, 8)]
-
-    for t, k in interesting:
-        set_seed(SEED)
-        model = create_model(k).to(DEVICE)
-        # We'd need to retrain, so instead just show dataset examples
-        ds = CellularAutomatonDataset(
-            num_examples=8, seq_len=SEQ_LEN, rule_number=RULE_NUMBER,
-            steps=t, seed=SEED,
-        )
-
-        lines = [f"Cellular Automaton Predictions (T={t}, K={k})", "=" * 50]
-        for i in range(min(4, len(ds))):
-            inp, tgt = ds[i]
-            lines.append(f"\nExample {i+1}:")
-            lines.append(f"  Input:  {''.join(str(x) for x in inp.tolist())}")
-
-            # Show trajectory
-            traj = simulate_trajectory(inp.tolist(), RULE_NUMBER, t)
-            for step_idx, state in enumerate(traj):
-                prefix = "  " if step_idx > 0 else "  "
-                label = f"t={step_idx}" if step_idx < t else f"t={step_idx} (target)"
-                lines.append(f"  {label}: {''.join(str(x) for x in state)}")
-
-        filepath = dirpath / f"examples_T{t}.txt"
-        with open(filepath, "w") as f:
-            f.write("\n".join(lines))
-
-        del model
-
-
-# ============================================================================
-# Saving
-# ============================================================================
-
-
-def save_results_csv(results: List[Dict[str, Any]], filepath: Path) -> None:
-    """Save results to CSV."""
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = [
-        "T", "K", "parameter_count",
-        "initial_loss", "final_loss",
-        "train_token_accuracy", "train_exact_match",
-        "val_token_accuracy", "val_exact_match",
-        "best_val_exact_match", "training_steps",
-    ]
-    with open(filepath, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(results)
-    print(f"  CSV saved: {filepath}")
-
-
-def save_config(filepath: Path) -> None:
-    """Save experiment config."""
-    config = {
-        "experiment": {"name": "cellular_automaton", "seed": SEED, "device": DEVICE},
-        "task": {
-            "rule_number": RULE_NUMBER,
-            "seq_len": SEQ_LEN,
-            "num_train": NUM_TRAIN,
-            "num_val": NUM_VAL,
-            "T_values": T_VALUES,
-        },
-        "model": {
-            "vocab_size": VOCAB_SIZE,
-            "d_model": D_MODEL,
-            "num_heads": NUM_HEADS,
-            "d_ff": D_FF,
-            "max_seq_len": MAX_SEQ_LEN,
-            "K_values": K_VALUES,
-            "alpha": ALPHA,
-            "dropout": DROPOUT,
-        },
-        "training": {
-            "learning_rate": LEARNING_RATE,
-            "max_steps": MAX_STEPS,
-            "early_stop_loss": EARLY_STOP_LOSS,
-            "batch_size": BATCH_SIZE,
-        },
-    }
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    with open(filepath, "w") as f:
-        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-    print(f"  Config: {filepath}")
-
-
-def save_summary(results: List[Dict[str, Any]], filepath: Path) -> None:
-    """Save human-readable summary."""
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-
-    P = results[0]["parameter_count"]
-    t_vals = sorted(set(r["T"] for r in results))
-    k_vals = sorted(set(r["K"] for r in results))
-
-    lines = []
-    lines.append("=" * 64)
-    lines.append("  TESSERACT CELLULAR AUTOMATON EXPERIMENT — SUMMARY")
-    lines.append("=" * 64)
-    lines.append("")
-    lines.append("  Research Question:")
-    lines.append("    When the task requires T sequential transformations,")
-    lines.append("    does increasing recursive depth K improve performance?")
-    lines.append("")
-    lines.append(f"  Rule:          {RULE_NUMBER}")
-    lines.append(f"  Seq length:    {SEQ_LEN}")
-    lines.append(f"  Train/Val:     {NUM_TRAIN}/{NUM_VAL}")
-    lines.append(f"  Parameters:    {P:,} (constant)")
-    lines.append(f"  Device:        {DEVICE}")
-
-    # Results matrix — Train EM
-    lines.append("")
-    lines.append("  Train Exact Match Accuracy (%):")
-    header = "  T\\K  | " + " | ".join(f"K={k:>2}" for k in k_vals) + " |"
+def build_summary(config: CellularAutomatonConfig, device: torch.device, rows: List[Dict[str, Any]], facts: Dict[str, Any]) -> str:
+    d = config.data
+    t_vals, k_vals, _ = _matrix(rows, "T")
+    header = "  T\\K  | " + " | ".join(f" K={k:<3}" for k in k_vals) + " |"
     sep = "  " + "-" * (len(header) - 2)
-    lines.append(sep)
-    lines.append(header)
-    lines.append(sep)
+
+    def table(key: str, title: str, fmt: str) -> List[str]:
+        _, _, matrix = _matrix(rows, key)
+        out = ["", f"  {title}:", sep, header, sep]
+        for t in t_vals:
+            cells = []
+            for k in k_vals:
+                v = matrix.get((t, k))
+                cells.append(f"{'N/A':>6}" if v is None else f"{v:>6{fmt}}")
+            out.append(f"  T={t:<3} | " + " | ".join(cells) + " |")
+        out.append(sep)
+        return out
+
+    lines = [
+        "=" * 64,
+        "  TESSERACT CELLULAR AUTOMATON EXPERIMENT — SUMMARY",
+        "=" * 64,
+        "",
+        "  Research question:",
+        "    When the task requires T sequential rule applications,",
+        "    does increasing recursive depth K improve performance?",
+        "",
+        f"  Rule:          {d.rule_number}",
+        f"  Seq length:    {d.seq_len}",
+        f"  Train/Val:     {d.num_train}/{d.num_val} (overlap: {facts['train_val_overlap']})",
+        f"  Parameters:    {facts['parameter_count']:,} (constant across K)",
+        f"  Device:        {device}",
+    ]
+    lines += table("train_exact_match", "Train Exact Match Accuracy (%)", ".1f")
+    lines += table("val_exact_match", "Val Exact Match Accuracy (%)", ".1f")
+    lines += table("val_token_accuracy", "Val Token Accuracy (%)  [chance ≈ 50]", ".1f")
+    lines += table("val_min_token_errors", f"Val: fewest wrong tokens in any sequence (of {d.seq_len})", ".0f")
+
+    lines += ["", "  Observations (validation exact match):"]
     for t in t_vals:
-        row_vals = []
-        for k in k_vals:
-            val = next(
-                (r["train_exact_match"] for r in results if r["T"] == t and r["K"] == k),
-                float("nan"),
-            )
-            row_vals.append(f"{val:>5.1f}" if val == val else "  N/A")
-        lines.append(f"  T={t:<2} | " + " | ".join(row_vals) + " |")
-    lines.append(sep)
+        ems = [(r["K"], r["val_exact_match"]) for r in rows if r["T"] == t and r["val_exact_match"] is not None]
+        if not ems:
+            lines.append(f"    T={t}: no evaluated cells")
+            continue
+        best_k, best = max(ems, key=lambda e: e[1])
+        worst_k, worst = min(ems, key=lambda e: e[1])
+        if best > worst + OBSERVATION_MARGIN:
+            lines.append(f"    T={t}: K={best_k} ({best:.1f}%) outperforms K={worst_k} ({worst:.1f}%)")
+        else:
+            lines.append(f"    T={t}: no K differs by more than {OBSERVATION_MARGIN:.0f} points (range {worst:.1f}%–{best:.1f}%)")
 
-    # Val EM
-    lines.append("")
-    lines.append("  Val Exact Match Accuracy (%):")
-    lines.append(sep)
-    lines.append(header)
-    lines.append(sep)
-    for t in t_vals:
-        row_vals = []
-        for k in k_vals:
-            val = next(
-                (r["val_exact_match"] for r in results if r["T"] == t and r["K"] == k),
-                float("nan"),
-            )
-            row_vals.append(f"{val:>5.1f}" if val == val else "  N/A")
-        lines.append(f"  T={t:<2} | " + " | ".join(row_vals) + " |")
-    lines.append(sep)
+    if facts["two_cell_xor_identity"]:
+        lines += ["", "  Task-structure check (Rule 90): target_i == x[i-T] XOR x[i+T] on all train+val data?"]
+        for t, holds in facts["two_cell_xor_identity"].items():
+            lines.append(f"    T={t}: {'yes' if holds else 'no'}")
+        lines.append("    Where 'yes', the target depends on exactly two input cells regardless of T.")
 
-    # Observations
-    lines.append("")
-    lines.append("  Observations:")
-
-    # Check if higher K helps for higher T
-    for t in t_vals:
-        ems = []
-        for k in k_vals:
-            val = next(
-                (r["val_exact_match"] for r in results if r["T"] == t and r["K"] == k),
-                None,
-            )
-            if val is not None:
-                ems.append((k, val))
-        if ems:
-            best_k, best_em = max(ems, key=lambda x: x[1])
-            worst_k, worst_em = min(ems, key=lambda x: x[1])
-            if best_em > worst_em + 5:
-                lines.append(
-                    f"    T={t}: K={best_k} ({best_em:.1f}%) outperforms "
-                    f"K={worst_k} ({worst_em:.1f}%)"
-                )
-            else:
-                lines.append(
-                    f"    T={t}: performance similar across K "
-                    f"(range: {worst_em:.1f}%–{best_em:.1f}%)"
-                )
-
-    lines.append("")
-    lines.append("=" * 64)
-
-    text = "\n".join(lines)
-    print(text)
-
-    with open(filepath, "w") as f:
-        f.write(text)
-    print(f"\n  Summary saved: {filepath}")
+    stops = sorted({r["stopped_reason"] for r in rows})
+    lines += [
+        "",
+        f"  Stop reasons: {', '.join(stops)}. final_loss is the last mini-batch loss; train/val",
+        "  metrics are full-set eval-mode measurements at each cell's last evaluation step.",
+        "",
+        "=" * 64,
+    ]
+    return "\n".join(lines)
 
 
-# ============================================================================
-# Main
-# ============================================================================
+def run_cellular_automaton(config: CellularAutomatonConfig, config_path: Path, device: torch.device, run_dir: Path) -> Dict[str, Any]:
+    with RunRecorder(run_dir, config.experiment.name, config, config_path, device, ARTIFACTS) as run:
+        rows, facts = run_experiment(config, device, run)
+
+        print("\n" + "=" * 64)
+        print("  SAVING ARTIFACTS")
+        print("=" * 64)
+        save_results_csv(rows, run.path("results.csv"))
+        rule = config.data.rule_number
+        plot_heatmap(rows, "train_exact_match", f"Train Exact Match (%) — Rule {rule} CA", run.path("train_em_heatmap.png"), "RdYlGn", 0, 100)
+        plot_heatmap(rows, "val_exact_match", f"Val Exact Match (%) — Rule {rule} CA", run.path("val_em_heatmap.png"), "RdYlGn", 0, 100)
+        plot_heatmap(rows, "val_token_accuracy", f"Val Token Accuracy (%) — Rule {rule} CA", run.path("val_token_acc_heatmap.png"), "RdYlGn", 0, 100)
+        plot_heatmap(rows, "final_loss", f"Final Mini-batch Loss — Rule {rule} CA", run.path("loss_heatmap.png"), "RdYlGn_r", 0, 1.0, fmt=".3f")
+        plot_accuracy_vs_k(rows, run.path("accuracy_vs_k.png"), rule)
+
+        summary_text = build_summary(config, device, rows, facts)
+        print(summary_text)
+        run.path("summary.txt").write_text(summary_text + "\n", encoding="utf-8")
+
+        non_finite = [(r["T"], r["K"]) for r in rows if r["stopped_reason"] == "non_finite_loss"]
+        verdict = "FAIL" if non_finite else "COMPLETED"
+        results = {
+            **facts,
+            "cells": len(rows),
+            "max_train_exact_match": max((r["train_exact_match"] or 0.0) for r in rows),
+            "max_val_exact_match": max((r["val_exact_match"] or 0.0) for r in rows),
+            "max_val_token_accuracy": max((r["val_token_accuracy"] or 0.0) for r in rows),
+            "non_finite_cells": non_finite,
+            "verdict": verdict,
+        }
+        run.finish(verdict=verdict, results=results)
+
+    print(f"\n  Cellular automaton experiment: {verdict}")
+    return results
 
 
-def main() -> None:
-    """Run the cellular automaton experiment."""
-    results = run_experiment()
-
-    print("\n" + "=" * 64)
-    print("  SAVING ARTIFACTS")
-    print("=" * 64)
-
-    save_results_csv(results, RUN_DIR / "results.csv")
-    save_config(RUN_DIR / "config.yaml")
-
-    # Heatmaps
-    plot_heatmap(
-        results,
-        metric_key="train_exact_match",
-        title="Train Exact Match (%) — Rule 90 CA",
-        filepath=RUN_DIR / "train_em_heatmap.png",
-        cmap="RdYlGn",
-        vmin=0, vmax=100,
-    )
-    plot_heatmap(
-        results,
-        metric_key="val_exact_match",
-        title="Val Exact Match (%) — Rule 90 CA",
-        filepath=RUN_DIR / "val_em_heatmap.png",
-        cmap="RdYlGn",
-        vmin=0, vmax=100,
-    )
-    plot_heatmap(
-        results,
-        metric_key="final_loss",
-        title="Final Loss — Rule 90 CA",
-        filepath=RUN_DIR / "loss_heatmap.png",
-        cmap="RdYlGn_r",
-        vmin=0, vmax=1.0,
-        fmt=".3f",
-    )
-
-    # Line plots
-    plot_accuracy_vs_k_by_t(results, RUN_DIR / "accuracy_vs_k.png")
-
-    # Predictions
-    save_predictions(results, RUN_DIR / "predictions")
-
-    # Summary
-    save_summary(results, RUN_DIR / "summary.txt")
-
-    print("\n  ✓ Cellular automaton experiment complete.")
-    print("=" * 64)
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    setup = parse_setup(argv, "Tesseract cellular automaton experiment", "cellular_automaton", CellularAutomatonConfig)
+    results = run_cellular_automaton(setup.config, setup.config_path, setup.device, setup.run_dir)
+    return 0 if results["verdict"] != "FAIL" else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

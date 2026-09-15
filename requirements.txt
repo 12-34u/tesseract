@@ -1,7 +1,10 @@
-torch
-einops
-numpy
-pytest
-matplotlib
-wandb
-pyyaml
+# Core research code. Python >= 3.10. Versions in comments were used for the
+# Phase 1 audit runs (Python 3.12.3, CPU).
+torch>=2.2,<3        # tested 2.13.0 (+cpu)
+einops>=0.7          # tested 0.8.2
+numpy>=1.26          # tested 2.5.2
+pyyaml>=6.0          # tested 6.0.3
+matplotlib>=3.8      # tested 3.11.1
+pytest>=8            # tested 9.1.1
+
+# Dashboard backend dependencies: app/backend/requirements.txt

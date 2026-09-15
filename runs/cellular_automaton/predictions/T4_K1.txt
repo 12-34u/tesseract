@@ -1,0 +1,27 @@
+Validation predictions — Rule 90, T=4, K=1
+(model at the final evaluation point; '^' marks wrong tokens)
+==================================================
+
+Example 1: 9 wrong token(s)
+  input:      01000110101100110010110011100000
+  target:     01101111010110011111110011001010
+  prediction: 01101111000011110111110000000000
+  errors:              ^ ^ ^^ ^       ^^  ^ ^ 
+
+Example 2: 4 wrong token(s)
+  input:      01101011101110110100001010011101
+  target:     01101101000011111001110111111111
+  prediction: 01101101010111110101110111111111
+  errors:              ^ ^    ^^              
+
+Example 3: 7 wrong token(s)
+  input:      01011100100111000110100101110011
+  target:     11111100000011110101000110100010
+  prediction: 11111110010011110101001001100000
+  errors:           ^  ^            ^^^^    ^ 
+
+Example 4: 5 wrong token(s)
+  input:      01000111010000111001101001101001
+  target:     11100000010011011001111100110010
+  prediction: 11100010010010011101111111110010
+  errors:           ^      ^   ^      ^^      

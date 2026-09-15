@@ -43,6 +43,10 @@ class RecursiveReasoner(nn.Module):
         dropout: float = 0.0,
     ) -> None:
         super().__init__()
+        if isinstance(num_recursive_steps, bool) or not isinstance(num_recursive_steps, int) or num_recursive_steps < 1:
+            raise ValueError(f"num_recursive_steps (K) must be an integer >= 1, got {num_recursive_steps!r}.")
+        if not 0.0 <= alpha <= 1.0:
+            raise ValueError(f"alpha must be in [0, 1], got {alpha}.")
         self.d_model = d_model
         self.num_recursive_steps = num_recursive_steps
         self.alpha = alpha

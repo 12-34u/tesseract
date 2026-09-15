@@ -1,0 +1,38 @@
+# Cellular automaton: predict the state of a 1D binary CA after T rule
+# applications, for every (T, K) pair, from identical initial weights.
+#
+# NOTE (audit): for Rule 90 and T a power of two, target_i = x[i-T] XOR x[i+T]
+# exactly, so T in {1, 2, 4, 8} does not increase the number of input cells a
+# target depends on. See PHASE1_FINAL_AUDIT.md. Values are kept as run in Phase 1.
+
+experiment:
+  name: cellular_automaton
+  output_dir: cellular_automaton
+  seed: 42
+  device: auto
+
+model:
+  base: prototype_small
+  overrides:
+    vocab_size: 2
+
+k_values: [1, 2, 4, 8]
+
+data:
+  rule_number: 90
+  seq_len: 32              # 16 would make T=8 collapse to all zeros (i-8 == i+8 mod 16)
+  t_values: [1, 2, 4, 8]
+  num_train: 256
+  num_val: 64
+  val_seed_offset: 1000    # validation generator seed = experiment.seed + offset
+
+training:
+  optimizer:
+    name: adamw
+    learning_rate: 0.001
+    weight_decay: 0.01
+  batch_size: 64           # mini-batch indices sampled with replacement from the CPU torch RNG
+  max_steps: 2000
+  early_stop_loss: 0.005   # compared against the current mini-batch loss
+  eval_every: 200          # full train/val evaluation every N steps...
+  eval_first_steps: 5      # ...on each of the first N steps, at max_steps and at early stop

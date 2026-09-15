@@ -1,30 +1,38 @@
 experiment:
   name: k_scaling
+  output_dir: k_scaling
   seed: 42
-  device: cpu
+  device: auto
+model:
+  vocab_size: 16
+  max_seq_len: 64
+  d_model: 128
+  num_heads: 4
+  d_ff: 512
+  alpha: 0.9
+  dropout: 0.0
 k_values:
 - 1
 - 2
 - 4
 - 8
-model:
-  vocab_size: 16
-  d_model: 128
-  num_heads: 4
-  d_ff: 512
-  max_seq_len: 64
-  alpha: 0.9
-  dropout: 0.0
 benchmark:
-  warmup_runs: 10
-  timing_runs: 30
   batch_size: 16
   seq_len: 16
+  global_warmup_k: 4
+  global_warmup_runs: 5
+  warmup_runs: 10
+  timing_runs: 30
 training:
   enabled: true
-  batch_size: 16
-  learning_rate: 0.0003
+  data:
+    task: copy
+    num_examples: 16
+    seq_len: 16
+  optimizer:
+    name: adamw
+    learning_rate: 0.0003
+    weight_decay: 0.01
   max_steps: 200
   early_stop_loss: 0.01
-  dataset: copy
-  num_examples: 16
+  log_every: 50

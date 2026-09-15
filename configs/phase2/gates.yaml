@@ -1,0 +1,10 @@
+# Phase 2 verification + gates G1/G2 + frozen splits + sanity baselines.
+# No model is trained. Pilot P1 refuses to run unless this run's verdict is PASS.
+
+experiment:
+  name: phase2_gates
+  output_dir: phase2/gates   # the pilot and grid look for the gate verdict here
+  seed: 7                    # informational; gate RNG streams use benchmark.gates.seed
+  device: cpu                # no model involved
+
+benchmark: phase2/benchmark

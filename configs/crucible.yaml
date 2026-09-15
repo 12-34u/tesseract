@@ -1,19 +1,36 @@
-experiment:
-  name: tesseract_crucible_k04
+# Crucible: can the ~211K prototype overfit 16 copy examples, with gradients
+# flowing through all K recursive steps (full BPTT)?
+# Training is full-batch: every step uses all `data.num_examples` examples.
 
-data:
-  type: toy_copy
-  num_examples: 16
-  seq_len: 16
-  vocab_size: 16
+experiment:
+  name: crucible
+  output_dir: crucible_k04   # relative to runs root ($TESSERACT_RUNS_DIR or <repo>/runs)
+  seed: 42
+  device: auto               # auto | cpu | cuda[:N]; CLI --device overrides
 
 model:
-  config: prototype_small
+  base: prototype_small
+  overrides:
+    vocab_size: 16
 
-recursion:
-  k: 4
+k: 4
+
+data:
+  task: copy
+  num_examples: 16
+  seq_len: 16
 
 training:
-  batch_size: 16
-  learning_rate: 0.0003
+  optimizer:
+    name: adamw
+    learning_rate: 0.0003
+    weight_decay: 0.01        # torch.optim.AdamW default, stated explicitly
   max_steps: 500
+  early_stop_loss: 0.01
+  log_every: 10
+  grad_instrument_every: 10       # record per-step dL/dz norms every N steps...
+  grad_instrument_first_steps: 5  # ...and on each of the first N steps
+
+pass_criteria:
+  max_final_loss: 0.1
+  min_exact_match: 90.0

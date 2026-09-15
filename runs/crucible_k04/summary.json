@@ -1,0 +1,35 @@
+{
+  "k": 4,
+  "parameter_count": 210832,
+  "dataset": {
+    "task": "copy",
+    "num_examples": 16,
+    "seq_len": 16,
+    "vocab_size": 16
+  },
+  "initial_loss": 8.385885238647461,
+  "final_loss": 0.009970738552510738,
+  "final_token_accuracy": 100.0,
+  "final_exact_match_accuracy": 100.0,
+  "final_metrics_note": "final_* come from the last training step's forward pass, before its optimizer update (train mode)",
+  "post_training_eval": {
+    "token_accuracy": 100.0,
+    "exact_match_accuracy": 100.0
+  },
+  "training_steps": 32,
+  "stopped_reason": "early_stop",
+  "early_stop_loss": 0.01,
+  "parameter_update_delta_norm": 0.3392220437526703,
+  "pass_criteria": {
+    "max_final_loss": 0.1,
+    "min_exact_match": 90.0
+  },
+  "checks": {
+    "parameters_updated": true,
+    "loss_finite": true,
+    "loss_converged": true,
+    "exact_match_reached": true,
+    "bptt_gradients_ok": true
+  },
+  "verdict": "PASS"
+}

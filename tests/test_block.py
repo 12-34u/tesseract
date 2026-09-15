@@ -154,12 +154,15 @@ def test_gradient_flow_through_repeated_applications():
 
 
 def test_block_parameter_count_measurement():
-    """Verify expected parameter count (~198K) for prototype small block configuration."""
-    block = TransformerBlock(d_model=128, num_heads=4, d_ff=512)
+    """Measured block parameters equal the analytic formula for its dimensions."""
+    d_model, d_ff = 128, 512
+    block = TransformerBlock(d_model=d_model, num_heads=4, d_ff=d_ff)
     counts = count_parameters(block)
 
-    # LN1 (256) + MHA (66,048) + LN2 (256) + FFN (131,712) = 198,272
-    expected_count = 198272
+    layer_norms = 2 * (2 * d_model)
+    attention = (3 * d_model * d_model + 3 * d_model) + (d_model * d_model + d_model)
+    ffn = (d_model * d_ff + d_ff) + (d_ff * d_model + d_model)
+    expected_count = layer_norms + attention + ffn
 
     assert (
         counts["trainable"] == expected_count

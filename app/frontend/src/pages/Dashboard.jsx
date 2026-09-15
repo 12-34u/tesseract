@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { api } from '../services/api';
+import { api, API_BASE_URL } from '../services/api';
+import { fmtInt, fmtNum, verdictStatus } from '../format';
 import { Header } from '../components/Header';
 import { MetricCard } from '../components/MetricCard';
 import { ArchitectureCard } from '../components/ArchitectureCard';
@@ -10,48 +11,55 @@ import { KeyFindings } from '../components/KeyFindings';
 import { StatusPanel } from '../components/StatusPanel';
 import { RawDataModal } from '../components/RawDataModal';
 
+const ENDPOINTS = [
+  ['summary', api.getSummary],
+  ['crucible', api.getCrucible],
+  ['kScaling', api.getKScaling],
+  ['ca', api.getCellularAutomaton],
+  ['raw', api.getRawResults],
+];
+
+/** Fetch every endpoint; one failing endpoint does not hide the others. */
+async function fetchAll() {
+  const settled = await Promise.allSettled(ENDPOINTS.map(([, fetcher]) => fetcher()));
+  const data = {};
+  const errors = {};
+  settled.forEach((result, i) => {
+    const key = ENDPOINTS[i][0];
+    if (result.status === 'fulfilled') data[key] = result.value;
+    else errors[key] = result.reason?.message || String(result.reason);
+  });
+  return { data, errors };
+}
+
 export function Dashboard() {
   const [selectedExperiment, setSelectedExperiment] = useState('overview');
   const [presentationMode, setPresentationMode] = useState(false);
   const [isRawDataOpen, setIsRawDataOpen] = useState(false);
-
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [errors, setErrors] = useState({});
+  const [data, setData] = useState({});
 
-  const [summaryData, setSummaryData] = useState(null);
-  const [crucibleData, setCrucibleData] = useState(null);
-  const [kScalingData, setKScalingData] = useState(null);
-  const [caData, setCAData] = useState(null);
-  const [rawData, setRawData] = useState(null);
+  const applyResult = (result) => {
+    setData(result.data);
+    setErrors(result.errors);
+    setLoading(false);
+  };
 
-  const loadAllData = async () => {
+  const loadAllData = () => {
     setLoading(true);
-    setError(null);
-    try {
-      const [sum, cru, ksc, ca, raw] = await Promise.all([
-        api.getSummary(),
-        api.getCrucible(),
-        api.getKScaling(),
-        api.getCellularAutomaton(),
-        api.getRawResults(),
-      ]);
-
-      setSummaryData(sum);
-      setCrucibleData(cru);
-      setKScalingData(ksc);
-      setCAData(ca);
-      setRawData(raw);
-    } catch (err) {
-      console.error('Failed to load dashboard data:', err);
-      setError(err.message || 'Failed to fetch experiment data from backend.');
-    } finally {
-      setLoading(false);
-    }
+    fetchAll().then(applyResult);
   };
 
   useEffect(() => {
-    loadAllData();
+    fetchAll().then(applyResult);
   }, []);
+
+  const { summary, crucible, kScaling, ca, raw } = data;
+  const counts = summary?.parameter_counts ?? [];
+  const crucibleSummary = crucible?.summary;
+  const errorList = Object.entries(errors);
+  const show = (id) => selectedExperiment === 'overview' || selectedExperiment === id;
 
   return (
     <div className={`dashboard-container ${presentationMode ? 'presentation-mode' : ''}`}>
@@ -66,11 +74,11 @@ export function Dashboard() {
 
       {loading && (
         <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-          Loading experiment metrics from runs/...
+          Loading experiment artifacts…
         </div>
       )}
 
-      {error && (
+      {errorList.length > 0 && (
         <div
           style={{
             padding: '1.25rem',
@@ -81,75 +89,67 @@ export function Dashboard() {
             marginBottom: '1.5rem',
           }}
         >
-          <strong>Backend Error:</strong> {error}. Ensure FastAPI backend is running at http://localhost:8000.
+          <strong>Backend error</strong> ({API_BASE_URL}):
+          <ul style={{ marginTop: '0.5rem', paddingLeft: '1.25rem' }}>
+            {errorList.map(([key, message]) => (
+              <li key={key}>{message}</li>
+            ))}
+          </ul>
         </div>
       )}
 
       {!loading && (
         <>
-          {/* Top Summary Cards (Compact Overview) */}
           <div className="grid grid-cols-4" style={{ marginBottom: '1.5rem' }}>
             <MetricCard
-              title="Parameters"
-              value={summaryData?.parameter_count?.toLocaleString() || '210,832'}
-              subtext="Shared Recursive Transformer"
-              badge="CONSTANT"
-              status="pass"
+              title="Trainable Parameters"
+              value={fmtInt(summary?.parameter_count)}
+              subtext={
+                counts.length > 1
+                  ? `Differs across K: ${counts.map((c) => c.toLocaleString()).join(', ')}`
+                  : 'Measured from each model (K-scaling results)'
+              }
+              badge={counts.length === 1 ? 'CONSTANT ACROSS K' : counts.length > 1 ? 'VARIES' : 'NO DATA'}
+              status={counts.length === 1 ? 'pass' : counts.length > 1 ? 'fail' : 'warn'}
             />
-
             <MetricCard
               title="K Tested"
-              value="1 / 2 / 4 / 8"
-              subtext="Recursive Iterations"
-              badge="INVARIANCE"
-              status="pass"
+              value={summary?.k_tested?.length ? summary.k_tested.join(' / ') : '—'}
+              subtext="Recursive depths in K-scaling results"
             />
-
             <MetricCard
-              title="Crucible Benchmark"
-              value="100.0%"
-              subtext="Copy Task Loss < 0.01"
-              badge="PASS"
-              status="pass"
+              title="Crucible Exact Match"
+              value={fmtNum(crucibleSummary?.final_exact_match_accuracy, 1, '%')}
+              subtext={
+                crucibleSummary
+                  ? `Loss ${fmtNum(crucibleSummary.final_loss, 6)} after ${crucibleSummary.training_steps} steps`
+                  : 'No Crucible summary.json'
+              }
+              badge={crucibleSummary?.verdict ?? 'NO VERDICT'}
+              status={verdictStatus(crucibleSummary?.verdict)}
             />
-
             <MetricCard
               title="Device"
-              value={summaryData?.device || 'CPU'}
-              subtext="PyTorch Standard Engine"
-              badge="READY"
-              status="pass"
+              value={summary?.device ? summary.device.toUpperCase() : '—'}
+              subtext="Recorded in K-scaling run metadata"
             />
           </div>
 
-          {/* Conditional Experiment Display */}
-          {(selectedExperiment === 'overview' || selectedExperiment === 'k_scaling') && (
-            <KScalingSection data={kScalingData} />
-          )}
-
-          {(selectedExperiment === 'overview' || selectedExperiment === 'crucible') && (
-            <CrucibleSection data={crucibleData} />
-          )}
-
-          {(selectedExperiment === 'overview' || selectedExperiment === 'cellular_automaton') && (
-            <CASection data={caData} />
-          )}
+          {show('k_scaling') && <KScalingSection data={kScaling} error={errors.kScaling} />}
+          {show('crucible') && <CrucibleSection data={crucible} error={errors.crucible} />}
+          {show('cellular_automaton') && <CASection data={ca} error={errors.ca} />}
 
           {selectedExperiment === 'overview' && (
             <>
-              <ArchitectureCard summaryData={summaryData} />
-              <KeyFindings findings={summaryData?.key_findings} />
-              <StatusPanel statusData={summaryData?.status} />
+              <ArchitectureCard summary={summary} crucible={crucible} />
+              <KeyFindings findings={summary?.findings} />
+              <StatusPanel experiments={summary?.experiments} />
             </>
           )}
         </>
       )}
 
-      <RawDataModal
-        isOpen={isRawDataOpen}
-        onClose={() => setIsRawDataOpen(false)}
-        rawData={rawData}
-      />
+      <RawDataModal isOpen={isRawDataOpen} onClose={() => setIsRawDataOpen(false)} rawData={raw} />
     </div>
   );
 }

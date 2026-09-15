@@ -1,256 +1,358 @@
-"""Results Loader Service for Tesseract Evaluation Dashboard.
+"""Read-only access to Tesseract experiment artifacts for the dashboard.
 
-Parses actual experiment artifacts from runs/ directory:
-  - runs/crucible_k04/metrics.csv
-  - runs/k_scaling/results.csv & config.yaml
-  - runs/cellular_automaton/results.csv & config.yaml & summary.txt
-  - runs/final_results.csv
-  - runs/AUG21_RESULTS.md
+The dashboard contributes no numbers of its own. Every value comes from files
+written by the experiments under the runs root (``$TESSERACT_RUNS_DIR`` or
+``<repo>/runs``). Each experiment's directory name is read from its config in
+``configs/``. A value that was not recorded is returned as ``null``, never as
+a default, and a file that cannot be parsed is reported as an error.
+
+This module deliberately does not import torch or the research packages, so
+the backend stays lightweight.
 """
 
 import csv
+import io
+import json
+import math
 import os
-from typing import Any, Dict, List, Optional
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
+
 import yaml
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+CONFIG_DIR = REPO_ROOT / "configs"
+RUNS_DIR_ENV = "TESSERACT_RUNS_DIR"
+
+EXPERIMENTS = {
+    "crucible": "Crucible (Copy Overfitting + BPTT)",
+    "k_scaling": "K-Scaling (Parameter Invariance + Latency)",
+    "cellular_automaton": "Cellular Automaton (T × K)",
+}
+
+# Files the raw-data view may return. Fixed names only: no user-supplied paths.
+RAW_FILES = {
+    "crucible": ["summary.json", "bptt_verification.json", "metrics.csv", "config.yaml", "run_metadata.json"],
+    "k_scaling": ["results.csv", "summary.txt", "config.yaml", "run_metadata.json"],
+    "cellular_automaton": ["results.csv", "summary.txt", "config.yaml", "run_metadata.json"],
+}
+
+LEGACY_NOTE = (
+    "No run_metadata.json: these artifacts predate run metadata, so the code "
+    "version, seed and device that produced them cannot be verified."
+)
+
+
+class ArtifactError(Exception):
+    """An artifact exists but is malformed."""
+
+
+# ============================================================================
+# File reading (cached by mtime/size so repeated requests do not re-read)
+# ============================================================================
+
+
+@lru_cache(maxsize=128)
+def _read_cached(path: str, mtime_ns: int, size: int) -> str:
+    return Path(path).read_text(encoding="utf-8")
+
+
+def read_text(path: Path) -> Optional[str]:
+    """File contents, or None if the file does not exist."""
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return _read_cached(str(path), stat.st_mtime_ns, stat.st_size)
+
+
+def _json_safe(value: Any) -> Any:
+    """NaN/Inf cannot be sent as JSON; they are missing values."""
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
+def read_json(path: Path) -> Optional[Any]:
+    text = read_text(path)
+    if text is None:
+        return None
+    try:
+        return _json_safe(json.loads(text))
+    except json.JSONDecodeError as exc:
+        raise ArtifactError(f"{path.name}: invalid JSON ({exc})") from exc
+
+
+def read_yaml(path: Path) -> Optional[Any]:
+    text = read_text(path)
+    if text is None:
+        return None
+    try:
+        return _json_safe(yaml.safe_load(text))
+    except yaml.YAMLError as exc:
+        raise ArtifactError(f"{path.name}: invalid YAML ({exc})") from exc
+
+
+def _parse_number(value: str, where: str) -> Optional[float]:
+    if value == "":
+        return None
+    try:
+        number = float(value)
+    except ValueError:
+        raise ArtifactError(f"{where}: {value!r} is not a number") from None
+    if not math.isfinite(number):
+        return None
+    if number.is_integer() and value.lstrip("-").isdigit():
+        return int(number)
+    return number
+
+
+def parse_csv(text: str, name: str, required: Set[str], text_columns: Set[str] = frozenset()) -> List[Dict[str, Any]]:
+    """Parse a results CSV strictly.
+
+    Every column must be numeric (or empty → None) unless listed in
+    ``text_columns``. Missing required columns, ragged rows, non-numeric values
+    and files with no data rows raise :class:`ArtifactError`.
+    """
+    reader = csv.DictReader(io.StringIO(text))
+    header = reader.fieldnames or []
+    missing = sorted(required - set(header))
+    if missing:
+        raise ArtifactError(f"{name}: missing required columns {missing}")
+
+    rows: List[Dict[str, Any]] = []
+    for line, raw in enumerate(reader, start=2):
+        if None in raw or any(v is None for v in raw.values()):
+            raise ArtifactError(f"{name}: line {line} has the wrong number of fields")
+        rows.append({
+            key: (value or None) if key in text_columns else _parse_number(value, f"{name}: line {line}, column {key!r}")
+            for key, value in raw.items()
+        })
+    if not rows:
+        raise ArtifactError(f"{name}: no data rows")
+    return rows
+
+
+# ============================================================================
+# Loader
+# ============================================================================
 
 
 class ResultsLoader:
-    def __init__(self, base_dir: Optional[str] = None):
-        if base_dir is None:
-            # Point to tesseract repository root / runs
-            curr_dir = os.path.dirname(os.path.abspath(__file__))
-            self.repo_root = os.path.dirname(os.path.dirname(os.path.dirname(curr_dir)))
-            self.runs_dir = os.path.join(self.repo_root, "runs")
-        else:
-            self.runs_dir = base_dir
+    def __init__(self, runs_root: Optional[Path] = None, config_dir: Path = CONFIG_DIR) -> None:
+        if runs_root is None:
+            override = os.environ.get(RUNS_DIR_ENV)
+            runs_root = Path(override).expanduser().resolve() if override else REPO_ROOT / "runs"
+        self.runs_root = Path(runs_root)
+        self.config_dir = Path(config_dir)
 
-    def get_summary(self) -> Dict[str, Any]:
-        """Aggregate high-level overview metrics."""
-        k_scaling = self.get_k_scaling()
-        crucible = self.get_crucible()
-        ca = self.get_cellular_automaton()
+    # -- helpers ---------------------------------------------------------------
 
-        param_count = 210832
-        if k_scaling.get("available") and k_scaling.get("results"):
-            param_count = k_scaling["results"][0].get("parameter_count", 210832)
+    def output_dir(self, experiment: str) -> Path:
+        config = read_yaml(self.config_dir / f"{experiment}.yaml")
+        try:
+            output_dir = Path(config["experiment"]["output_dir"])
+        except (TypeError, KeyError) as exc:
+            raise ArtifactError(f"configs/{experiment}.yaml: missing experiment.output_dir") from exc
+        return output_dir if output_dir.is_absolute() else self.runs_root / output_dir
 
+    def _base(self, experiment: str, run_dir: Path) -> Dict[str, Any]:
+        metadata = read_json(run_dir / "run_metadata.json")
         return {
-            "model_name": "Tesseract Prototype",
-            "parameter_count": param_count,
-            "d_model": 128,
-            "num_heads": 4,
-            "d_ff": 512,
-            "max_seq_len": 64,
-            "shared_blocks": 1,
-            "k_tested": [1, 2, 4, 8],
-            "default_k": 4,
-            "bptt_status": "Active (Full BPTT)",
-            "device": "CPU",
-            "status": {
-                "crucible": "PASS" if crucible.get("available") else "UNAVAILABLE",
-                "k_scaling": "PASS" if k_scaling.get("available") else "UNAVAILABLE",
-                "cellular_automaton": "EXECUTED (Val 0%)" if ca.get("available") else "UNAVAILABLE",
-                "prototype_validation": "PASS",
-            },
-            "key_findings": [
-                "Parameter count remains strictly constant (210,832) across all tested recursive depths K ∈ {1, 2, 4, 8}.",
-                "Forward pass CPU latency increases predictably with depth K (from 0.87 ms at K=1 to 10.36 ms at K=8).",
-                "Crucible training achieved 100% token accuracy and 100% exact-match accuracy with loss < 0.01 in 32 steps.",
-                "Backpropagation Through Time (BPTT) confirmed active, non-zero gradient flow back through all K=4 recursive state steps.",
-                "1D Cellular Automaton (Rule 90) overfits training data (>95% exact match), but validation accuracy remains 0.0% across all T and K (requires post-Aug-21 architectural expansion).",
-            ],
+            "experiment": experiment,
+            "name": EXPERIMENTS[experiment],
+            "output_dir": run_dir.name,
+            "run": metadata,
+            "provenance_note": None if metadata else LEGACY_NOTE,
+            "config": read_yaml(run_dir / "config.yaml"),
         }
 
-    def get_crucible(self) -> Dict[str, Any]:
-        """Load Crucible experiment metrics."""
-        metrics_file = os.path.join(self.runs_dir, "crucible_k04", "metrics.csv")
-        if not os.path.exists(metrics_file):
-            return {"available": False, "message": "Crucible results file not found."}
-
-        metrics: List[Dict[str, Any]] = []
+    def _load(self, experiment: str, primary: str, build) -> Dict[str, Any]:
         try:
-            with open(metrics_file, "r", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    item: Dict[str, Any] = {
-                        "step": int(row["step"]),
-                        "loss": float(row["loss"]),
-                        "token_accuracy": float(row["token_accuracy"]),
-                        "exact_match_accuracy": float(row["exact_match_accuracy"]),
-                        "gradient_norm": float(row["gradient_norm"]) if row.get("gradient_norm") else None,
-                    }
-                    
-                    # Read per-step z_L and z_H gradient norms if present
-                    z_L_grads = []
-                    for k in range(1, 5):
-                        key = f"grad_zL_step_{k}"
-                        if row.get(key) and row[key] != "":
-                            z_L_grads.append(float(row[key]))
-                    if z_L_grads:
-                        item["z_L_gradient_norms"] = z_L_grads
+            run_dir = self.output_dir(experiment)
+            text = read_text(run_dir / primary)
+            if text is None:
+                # Metadata is still reported, so a running or crashed run is visible as such.
+                return {**self._base(experiment, run_dir), "status": "missing",
+                        "message": f"{run_dir.name}/{primary} not found — run the experiment first."}
+            return {**self._base(experiment, run_dir), "status": "available", **build(run_dir, text)}
+        except ArtifactError as exc:
+            return {"experiment": experiment, "name": EXPERIMENTS[experiment], "status": "error", "message": str(exc)}
 
-                    metrics.append(item)
+    # -- experiments -------------------------------------------------------------
 
-            final_row = metrics[-1] if metrics else {}
-            init_row = metrics[0] if metrics else {}
-
-            # BPTT Gradient sample from early steps
-            bptt_sample = [0.001346, 0.001066, 0.000900, 0.000820]
-            if metrics and "z_L_gradient_norms" in final_row and final_row["z_L_gradient_norms"]:
-                bptt_sample = final_row["z_L_gradient_norms"]
-
+    def get_crucible(self) -> Dict[str, Any]:
+        def build(run_dir: Path, text: str) -> Dict[str, Any]:
             return {
-                "available": True,
-                "summary": {
-                    "dataset": "Synthetic Copy Task",
-                    "num_examples": 16,
-                    "seq_len": 16,
-                    "vocab_size": 16,
-                    "K": 4,
-                    "parameter_count": 210832,
-                    "initial_loss": init_row.get("loss", 8.385885),
-                    "final_loss": final_row.get("loss", 0.009971),
-                    "token_accuracy": final_row.get("token_accuracy", 100.0),
-                    "exact_match_accuracy": final_row.get("exact_match_accuracy", 100.0),
-                    "training_steps": len(metrics),
-                    "early_stop": True,
-                    "bptt_gradients_zL": bptt_sample,
-                },
-                "metrics": metrics,
+                "metrics": parse_csv(text, "metrics.csv", {"step", "loss", "token_accuracy", "exact_match_accuracy"}),
+                "summary": read_json(run_dir / "summary.json"),
+                "bptt": read_json(run_dir / "bptt_verification.json"),
             }
-        except Exception as e:
-            return {"available": False, "error": str(e)}
+
+        return self._load("crucible", "metrics.csv", build)
 
     def get_k_scaling(self) -> Dict[str, Any]:
-        """Load K-scaling experiment results."""
-        results_file = os.path.join(self.runs_dir, "k_scaling", "results.csv")
-        config_file = os.path.join(self.runs_dir, "k_scaling", "config.yaml")
+        required = {"K", "parameter_count", "recursive_calls", "latency_mean_ms", "latency_median_ms", "latency_std_ms"}
 
-        if not os.path.exists(results_file):
-            return {"available": False, "message": "K-scaling results file not found."}
+        def build(run_dir: Path, text: str) -> Dict[str, Any]:
+            return {"results": parse_csv(text, "results.csv", required, {"stopped_reason"})}
 
-        results: List[Dict[str, Any]] = []
-        try:
-            with open(results_file, "r", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    results.append({
-                        "K": int(row["K"]),
-                        "parameter_count": int(row["parameter_count"]),
-                        "recursive_calls": int(row["recursive_calls"]),
-                        "latency_mean_ms": float(row["latency_mean_ms"]),
-                        "latency_median_ms": float(row["latency_median_ms"]),
-                        "latency_std_ms": float(row["latency_std_ms"]),
-                        "initial_loss": float(row["initial_loss"]),
-                        "final_loss": float(row["final_loss"]),
-                        "token_accuracy": float(row["token_accuracy"]),
-                        "exact_match_accuracy": float(row["exact_match_accuracy"]),
-                        "training_steps": int(row["training_steps"]),
-                    })
-
-            cfg = {}
-            if os.path.exists(config_file):
-                with open(config_file, "r", encoding="utf-8") as f:
-                    cfg = yaml.safe_load(f) or {}
-
-            return {
-                "available": True,
-                "config": cfg,
-                "results": results,
-            }
-        except Exception as e:
-            return {"available": False, "error": str(e)}
+        return self._load("k_scaling", "results.csv", build)
 
     def get_cellular_automaton(self) -> Dict[str, Any]:
-        """Load Cellular Automaton experiment results."""
-        results_file = os.path.join(self.runs_dir, "cellular_automaton", "results.csv")
-        config_file = os.path.join(self.runs_dir, "cellular_automaton", "config.yaml")
+        required = {"T", "K", "parameter_count", "train_token_accuracy", "train_exact_match",
+                    "val_token_accuracy", "val_exact_match", "training_steps"}
 
-        if not os.path.exists(results_file):
-            return {"available": False, "message": "Cellular Automaton results file not found."}
+        def build(run_dir: Path, text: str) -> Dict[str, Any]:
+            return {"results": parse_csv(text, "results.csv", required, {"stopped_reason"})}
 
-        results: List[Dict[str, Any]] = []
-        try:
-            with open(results_file, "r", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    results.append({
-                        "T": int(row["T"]),
-                        "K": int(row["K"]),
-                        "parameter_count": int(row["parameter_count"]),
-                        "initial_loss": float(row["initial_loss"]),
-                        "final_loss": float(row["final_loss"]),
-                        "train_token_accuracy": float(row["train_token_accuracy"]),
-                        "train_exact_match": float(row["train_exact_match"]),
-                        "val_token_accuracy": float(row["val_token_accuracy"]),
-                        "val_exact_match": float(row["val_exact_match"]),
-                        "best_val_exact_match": float(row.get("best_val_exact_match", 0.0)),
-                        "training_steps": int(row["training_steps"]),
-                    })
+        return self._load("cellular_automaton", "results.csv", build)
 
-            cfg = {}
-            if os.path.exists(config_file):
-                with open(config_file, "r", encoding="utf-8") as f:
-                    cfg = yaml.safe_load(f) or {}
-
-            return {
-                "available": True,
-                "task": {
-                    "rule": 90,
-                    "seq_len": 32,
-                    "num_train": 256,
-                    "num_val": 64,
-                    "parameter_count": 207234,
-                    "t_values": [1, 2, 4, 8],
-                    "k_values": [1, 2, 4, 8],
-                },
-                "config": cfg,
-                "results": results,
-            }
-        except Exception as e:
-            return {"available": False, "error": str(e)}
+    # -- aggregate views -----------------------------------------------------------
 
     def get_experiments(self) -> List[Dict[str, Any]]:
-        """List all experiments and status."""
-        crucible = self.get_crucible()
-        k_scaling = self.get_k_scaling()
-        ca = self.get_cellular_automaton()
+        return [self._status_entry(payload) for payload in self._all().values()]
 
-        return [
-            {
-                "id": "crucible",
-                "name": "Crucible (Copy Benchmark)",
-                "status": "PASS" if crucible.get("available") else "UNAVAILABLE",
-                "description": "Overfitting & BPTT gradient propagation test on copy task.",
-                "available": crucible.get("available", False),
-            },
-            {
-                "id": "k_scaling",
-                "name": "K-Scaling (Constant Params)",
-                "status": "PASS" if k_scaling.get("available") else "UNAVAILABLE",
-                "description": "Parameter count invariance and latency scaling across K=1,2,4,8.",
-                "available": k_scaling.get("available", False),
-            },
-            {
-                "id": "cellular_automaton",
-                "name": "Cellular Automaton (Rule 90)",
-                "status": "POST-AUG-21" if ca.get("available") else "UNAVAILABLE",
-                "description": "Iterative sequence transformation depth T vs recursive depth K evaluation.",
-                "available": ca.get("available", False),
-            },
-        ]
+    def get_summary(self) -> Dict[str, Any]:
+        data = self._all()
+        k_scaling, crucible = data["k_scaling"], data["crucible"]
+        k_rows = k_scaling.get("results") or []
 
-    def get_raw_results(self) -> Dict[str, Any]:
-        """Fetch raw CSV strings or JSON structure for display."""
-        final_csv_path = os.path.join(self.runs_dir, "final_results.csv")
-        final_csv_content = ""
-        if os.path.exists(final_csv_path):
-            with open(final_csv_path, "r", encoding="utf-8") as f:
-                final_csv_content = f.read()
+        model = None
+        for payload in (k_scaling, crucible, data["cellular_automaton"]):
+            candidate = (payload.get("config") or {}).get("model")
+            if isinstance(candidate, dict) and "d_model" in candidate:
+                model = {key: candidate.get(key) for key in ("d_model", "num_heads", "d_ff", "max_seq_len", "alpha", "dropout", "vocab_size")}
+                model["source"] = f"{payload['output_dir']}/config.yaml"
+                break
 
+        counts = sorted({r["parameter_count"] for r in k_rows if r["parameter_count"] is not None})
+        run = k_scaling.get("run") or {}
+        return {
+            "model": model,
+            "parameter_counts": counts,
+            "parameter_count": counts[0] if len(counts) == 1 else None,
+            "k_tested": sorted(r["K"] for r in k_rows),
+            "transformer_block_instances": (run.get("results") or {}).get("transformer_block_instances"),
+            "device": (run.get("device") or {}).get("type"),
+            "experiments": [self._status_entry(p) for p in data.values()],
+            "findings": derive_findings(data),
+        }
+
+    def get_raw_results(self) -> Dict[str, Dict[str, Optional[str]]]:
+        raw: Dict[str, Dict[str, Optional[str]]] = {}
+        for experiment, names in RAW_FILES.items():
+            try:
+                run_dir = self.output_dir(experiment)
+            except ArtifactError as exc:
+                raw[experiment] = {"error": str(exc)}
+                continue
+            raw[experiment] = {name: read_text(run_dir / name) for name in names}
+        return raw
+
+    def _all(self) -> Dict[str, Dict[str, Any]]:
         return {
             "crucible": self.get_crucible(),
             "k_scaling": self.get_k_scaling(),
             "cellular_automaton": self.get_cellular_automaton(),
-            "final_results_csv": final_csv_content,
         }
+
+    @staticmethod
+    def _status_entry(payload: Dict[str, Any]) -> Dict[str, Any]:
+        run = payload.get("run") or {}
+        return {
+            "id": payload["experiment"],
+            "name": payload["name"],
+            "artifact_status": payload["status"],  # available | missing | error
+            "message": payload.get("message"),
+            "run_status": run.get("status"),  # running | completed | failed | None (legacy)
+            "verdict": run.get("verdict"),
+            "run_id": run.get("run_id"),
+            "finished_at": run.get("finished_at"),
+            "git_commit": (run.get("git") or {}).get("commit"),
+            "git_dirty": (run.get("git") or {}).get("dirty"),
+            "provenance_note": payload.get("provenance_note"),
+        }
+
+
+# ============================================================================
+# Findings derived from artifacts
+# ============================================================================
+
+
+def _finding(level: str, text: str, source: str) -> Dict[str, str]:
+    return {"level": level, "text": text, "source": source}
+
+
+def derive_findings(data: Dict[str, Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Plain-language statements computed from the artifacts (level: ok | warn | info)."""
+    findings: List[Dict[str, str]] = []
+
+    k = data["k_scaling"]
+    if k["status"] == "available":
+        rows = k["results"]
+        src = f"{k['output_dir']}/results.csv"
+        ks = [r["K"] for r in rows]
+        counts = {r["parameter_count"] for r in rows}
+        if len(counts) == 1:
+            findings.append(_finding("ok", f"Trainable parameter count is identical ({next(iter(counts)):,}) for K ∈ {ks}.", src))
+        else:
+            findings.append(_finding("warn", f"Trainable parameter count differs across K: {sorted(counts)}.", src))
+        if k.get("run"):
+            matches = all(r["recursive_calls"] == r["K"] for r in rows)
+            findings.append(_finding("ok" if matches else "warn",
+                                     "Measured shared-block executions equal K for every model." if matches
+                                     else "Measured shared-block executions do NOT equal K.", src))
+        else:
+            findings.append(_finding("warn", "recursive_calls in this legacy results.csv were not recorded as measured values.", src))
+        by_median = sorted(rows, key=lambda r: r["K"])
+        device = ((k.get("run") or {}).get("device") or {}).get("type", "unrecorded device")
+        findings.append(_finding(
+            "info",
+            f"Median forward latency: {by_median[0]['latency_median_ms']:.2f} ms at K={by_median[0]['K']} → "
+            f"{by_median[-1]['latency_median_ms']:.2f} ms at K={by_median[-1]['K']} ({device}; wall-clock, not FLOPs).",
+            src,
+        ))
+
+    c = data["crucible"]
+    if c["status"] == "available":
+        s = c.get("summary")
+        if s:
+            findings.append(_finding(
+                "ok" if s["verdict"] == "PASS" else "warn",
+                f"Crucible {s['verdict']}: final loss {s['final_loss']:.6f}, token accuracy {s['final_token_accuracy']:.1f}%, "
+                f"exact match {s['final_exact_match_accuracy']:.1f}% after {s['training_steps']} steps ({s['stopped_reason']}).",
+                f"{c['output_dir']}/summary.json",
+            ))
+        else:
+            findings.append(_finding("warn", "Crucible has metrics.csv but no summary.json; no verdict was recorded.", c["output_dir"]))
+        b = c.get("bptt")
+        if b:
+            findings.append(_finding(
+                "ok" if b["passed"] else "warn",
+                f"BPTT verification {'passed' if b['passed'] else 'FAILED'}: gradient reached z_L at all {b['k']} recursive steps."
+                if b["passed"] else f"BPTT verification FAILED: {b['failures']}",
+                f"{c['output_dir']}/bptt_verification.json",
+            ))
+
+    ca = data["cellular_automaton"]
+    if ca["status"] == "available":
+        rows = ca["results"]
+        src = f"{ca['output_dir']}/results.csv"
+        train_em = [r["train_exact_match"] for r in rows if r["train_exact_match"] is not None]
+        val_em = [r["val_exact_match"] for r in rows if r["val_exact_match"] is not None]
+        val_tok = [r["val_token_accuracy"] for r in rows if r["val_token_accuracy"] is not None]
+        if train_em and val_em and val_tok:
+            findings.append(_finding(
+                "warn" if max(val_em) == 0.0 else "info",
+                f"Cellular automaton: train exact match {min(train_em):.1f}–{max(train_em):.1f}%, validation exact match "
+                f"{min(val_em):.1f}–{max(val_em):.1f}%, validation token accuracy {min(val_tok):.1f}–{max(val_tok):.1f}% "
+                f"(chance ≈ 50%) across {len(rows)} (T, K) cells.",
+                src,
+            ))
+    return findings

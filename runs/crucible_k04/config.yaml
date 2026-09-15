@@ -1,0 +1,31 @@
+experiment:
+  name: crucible
+  output_dir: crucible_k04
+  seed: 42
+  device: auto
+model:
+  vocab_size: 16
+  max_seq_len: 64
+  d_model: 128
+  num_heads: 4
+  d_ff: 512
+  alpha: 0.9
+  dropout: 0.0
+k: 4
+data:
+  task: copy
+  num_examples: 16
+  seq_len: 16
+training:
+  optimizer:
+    name: adamw
+    learning_rate: 0.0003
+    weight_decay: 0.01
+  max_steps: 500
+  early_stop_loss: 0.01
+  log_every: 10
+  grad_instrument_every: 10
+  grad_instrument_first_steps: 5
+pass_criteria:
+  max_final_loss: 0.1
+  min_exact_match: 90.0

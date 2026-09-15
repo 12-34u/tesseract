@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "run_id": "cellular_automaton-20260915T065823Z",
+  "experiment": "cellular_automaton",
+  "status": "completed",
+  "verdict": "COMPLETED",
+  "started_at": "2026-09-15T06:58:23+00:00",
+  "finished_at": "2026-09-15T07:17:49+00:00",
+  "config_file": "configs/cellular_automaton.yaml",
+  "seed": 42,
+  "device": {
+    "type": "cpu",
+    "torch_num_threads": 12
+  },
+  "environment": {
+    "python": "3.12.3",
+    "torch": "2.13.0+cpu",
+    "numpy": "2.5.2",
+    "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39"
+  },
+  "git": {
+    "commit": "7b141e9501bf7d1b143ddc083ce60411e0b463b2",
+    "dirty": true
+  },
+  "command": [
+    "/home/parth/Desktop/tesseract/experiments/cellular_automaton.py"
+  ],
+  "results": {
+    "parameter_count": 207234,
+    "train_val_overlap": 0,
+    "two_cell_xor_identity": {
+      "1": true,
+      "2": true,
+      "4": true,
+      "8": true
+    },
+    "cells": 16,
+    "max_train_exact_match": 99.21875,
+    "max_val_exact_match": 0.0,
+    "max_val_token_accuracy": 83.984375,
+    "non_finite_cells": [],
+    "verdict": "COMPLETED"
+  },
+  "error": null
+}

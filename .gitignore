@@ -19,7 +19,12 @@ wandb/
 *.pth
 checkpoints/
 logs/
-runs/
+# Phase 1 experiment artifacts are versioned (except *.pt checkpoints);
+# anything else under runs/ is local.
+runs/*
+!runs/crucible_k04/
+!runs/k_scaling/
+!runs/cellular_automaton/
 
 # Environment Variables & OS
 .env

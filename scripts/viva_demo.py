@@ -1,112 +1,87 @@
 #!/usr/bin/env python3
-"""Tesseract Viva Demonstration Script — Day 7 Presentation Freeze.
+"""Tesseract viva demonstration.
 
-Provides screenshot-ready diagnostic outputs demonstrating:
-1. End-to-End Execution & Tensor Shape Trace (Section 12)
-2. Weight Sharing Proof (Section 13)
-3. Parameter Invariance Proof (Section 14)
-4. BPTT Gradient Flow Proof (Section 15)
+Prints diagnostics computed live from the model (nothing is typed in):
+1. End-to-end tensor shape trace
+2. Weight sharing: block instances vs. measured block executions
+3. Parameter invariance across K
+4. BPTT gradient flow through every recursive state
+
+Usage:
+    python scripts/viva_demo.py [--seed 42]
 """
 
-import os
+import argparse
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import torch
-import torch.nn as nn
 
-# Ensure repository root is on sys.path
-repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if repo_root not in sys.path:
-    sys.path.insert(0, repo_root)
-
-from models.tesseract import TesseractModel
 from models.block import TransformerBlock
+from models.tesseract import TesseractModel
+from training.trainer import verify_bptt
+from utils.config import load_prototype_config
 from utils.param_count import count_parameters
 from utils.seed import set_seed
 
+K_VALUES = (1, 2, 4, 8)
+DEMO_BATCH, DEMO_SEQ_LEN = 2, 8  # small, readable demo input
 
-def main():
-    set_seed(42)
 
-    config = dict(
-        vocab_size=16,
-        d_model=128,
-        num_heads=4,
-        d_ff=512,
-        max_seq_len=64,
-        alpha=0.9,
-        dropout=0.0,
-    )
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--seed", type=int, default=42)
+    args = parser.parse_args()
 
-    print("========================================================")
-    print("  TESSERACT PROTOTYPE — VIVA DEMONSTRATION & PROOFS")
-    print("========================================================")
+    proto = load_prototype_config()
+    cfg, k = proto.model, proto.default_k
+    set_seed(args.seed)
+    model = TesseractModel.from_config(cfg, k)
+    tokens = torch.randint(0, cfg.vocab_size, (DEMO_BATCH, DEMO_SEQ_LEN))
+    targets = torch.randint(0, cfg.vocab_size, (DEMO_BATCH, DEMO_SEQ_LEN))
 
-    # 1. SECTION 12: Manual Execution Trace
-    print("\n--- 1. END-TO-END RECURSIVE FORWARD TRACE (K=4) ---")
-    B, N = 2, 8
-    model_k4 = TesseractModel(**config, num_recursive_steps=4)
-    tokens = torch.randint(0, config["vocab_size"], (B, N))
-    targets = torch.randint(0, config["vocab_size"], (B, N))
+    print("=" * 56)
+    print("  TESSERACT PROTOTYPE — VIVA DEMONSTRATION")
+    print("=" * 56)
 
-    print(f"Input tokens shape:       {list(tokens.shape)}")
-    x_emb = model_k4.embedding(tokens)
-    print(f"Embedding shape:          {list(x_emb.shape)}")
-    print(f"z_H initial shape:        {list(x_emb.shape)}")
-    print(f"z_L initial shape:        {list(x_emb.shape)}")
+    print(f"\n--- 1. END-TO-END RECURSIVE FORWARD TRACE (K={k}) ---")
+    calls = []
+    handle = model.reasoner.shared_block.register_forward_hook(lambda *_: calls.append(1))
+    with torch.no_grad():
+        x_emb = model.embedding(tokens)
+        logits, history = model(tokens, return_states=True)
+    handle.remove()
+    print(f"Input tokens:            {list(tokens.shape)}")
+    print(f"Embedding x_emb:         {list(x_emb.shape)}")
+    print(f"z_H^(0), z_L^(0):        learnable {list(model.reasoner.learnable_init_H.shape)} vectors broadcast to {list(x_emb.shape)}")
+    for step, states in enumerate(history, start=1):
+        print(f"Step {step}: z_H {list(states['z_H'].shape)}  z_L {list(states['z_L'].shape)}")
+    print(f"Logits:                  {list(logits.shape)}")
+    print(f"Loss:                    {model.compute_loss(logits, targets).item():.6f}")
 
-    logits, state_history = model_k4(tokens, return_states=True)
+    print("\n--- 2. WEIGHT SHARING ---")
+    blocks = sum(isinstance(m, TransformerBlock) for m in model.modules())
+    print(f"TransformerBlock instances:          {blocks}")
+    print(f"Shared-block executions (measured):  {len(calls)}")
+    print(f"Execution model: {blocks} block × {len(calls)} executions")
 
-    for step_idx, state in enumerate(state_history, start=1):
-        print(f"\nStep {step_idx}:")
-        print(f"  z_H shape:              {list(state['z_H'].shape)}")
-        print(f"  z_L shape:              {list(state['z_L'].shape)}")
+    print("\n--- 3. PARAMETER INVARIANCE ---")
+    for k_i in K_VALUES:
+        print(f"K={k_i} → {count_parameters(TesseractModel.from_config(cfg, k_i))['trainable']:,} trainable parameters")
 
-    print(f"\nOutput final z_L shape:   {list(state_history[-1]['z_L'].shape)}")
-    print(f"Logits shape:             {list(logits.shape)}")
-    loss = model_k4.compute_loss(logits, targets)
-    print(f"Loss value:               {loss.item():.6f}")
-
-    # 2. SECTION 13: Weight Sharing Verification
-    print("\n--- 2. WEIGHT SHARING VERIFICATION FOR VIVA ---")
-    tb_count = sum(1 for m in model_k4.modules() if isinstance(m, TransformerBlock))
-    print(f"Number of TransformerBlock instances: {tb_count}")
-    print(f"K (Recursive iterations executed):     8")
-    print("Execution model: 1 block × 8 executions (NOT 8 blocks × 1 execution)")
-
-    # 3. SECTION 14: Parameter Invariance Verification
-    print("\n--- 3. PARAMETER INVARIANCE VERIFICATION FOR VIVA ---")
-    for k in [1, 2, 4, 8]:
-        m_k = TesseractModel(**config, num_recursive_steps=k)
-        num_params = count_parameters(m_k)["trainable"]
-        print(f"K={k} → {num_params:,} trainable parameters")
-
-    # 4. SECTION 15: BPTT Gradient Flow Verification
-    print("\n--- 4. BPTT RECURSIVE GRADIENT FLOW DIAGNOSTIC ---")
-    model_k4.zero_grad()
-
-    # Forward pass returning intermediate states
-    logits_bptt, state_history_bptt = model_k4(tokens, return_states=True)
-
-    # Retain grads on intermediate z_L states
-    for state in state_history_bptt:
-        state["z_L"].retain_grad()
-
-    sample_loss = model_k4.compute_loss(logits_bptt, targets)
-    sample_loss.backward()
-
-    print("Recursive state gradient norms (||∂L/∂z_L^(k)||):")
-    for idx, state in enumerate(state_history_bptt, start=1):
-        gnorm = torch.norm(state["z_L"].grad).item() if state["z_L"].grad is not None else 0.0
-        print(f"  Step {idx}: {gnorm:.6f}")
-
-    print("\nExplanation:")
-    print("  'Because the recursive states remain connected in the computation graph,")
-    print("   the final loss generates gradients through the sequence of recursive state updates.'")
-
-    print("\n========================================================")
-    print("  VIVA DEMONSTRATION VERIFIED")
-    print("========================================================")
+    print(f"\n--- 4. BPTT GRADIENT FLOW (K={k}) ---")
+    report = verify_bptt(model, tokens, targets)
+    for s in report.steps:
+        g_h = "absent (z_H^(K) is not consumed)" if s.grad_z_H_norm is None else f"{s.grad_z_H_norm:.6f}"
+        print(f"  Step {s.step}: ||dL/dz_L|| = {s.grad_z_L_norm:.6f}   ||dL/dz_H|| = {g_h}")
+    print(f"BPTT verification: {'PASS' if report.passed else 'FAIL ' + str(report.failures)}")
+    print("\nThe recursive states stay connected in the computation graph, so the loss")
+    print("sends gradients back through every recursive state update.")
+    print("=" * 56)
+    return 0 if report.passed and len(calls) == k else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

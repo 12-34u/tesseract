@@ -1,181 +1,140 @@
 #!/usr/bin/env python3
-"""Tesseract Prototype Validation Script — Day 7 Milestone.
+"""Tesseract prototype health check.
 
-Automated health check verifying model initialization, K-scaling, weight sharing,
-numerical stability, backward pass, and parameter invariance.
+Builds the prototype from configs/prototype_small.yaml and verifies, for each
+Phase 1 recursion depth K: forward shape, finite outputs, a working backward
+pass, the measured shared-block call count, BPTT gradient flow, parameter
+invariance and weight sharing. Every check runs, even if an earlier one
+failed; the script exits 1 if any check fails.
+
+Usage:
+    python scripts/validate_prototype.py [--device auto|cpu|cuda] [--seed 42]
 """
 
-import os
+import argparse
 import sys
+import traceback
+from pathlib import Path
+from typing import Callable, Dict, List, Tuple
 
-# Ensure repository root is on sys.path
-repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if repo_root not in sys.path:
-    sys.path.insert(0, repo_root)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import torch
-import torch.nn as nn
 
-from models.tesseract import TesseractModel
 from models.block import TransformerBlock
+from models.tesseract import TesseractModel
+from training.trainer import verify_bptt
+from utils.config import load_prototype_config
+from utils.device import resolve_device
 from utils.param_count import count_parameters
 from utils.seed import set_seed
 
+K_VALUES = (1, 2, 4, 8)  # Phase 1 recursion depths under validation
+PROBE_BATCH, PROBE_SEQ_LEN = 4, 16  # probe input size; any valid size works
 
-def main():
-    set_seed(42)
 
-    config = dict(
-        vocab_size=16,
-        d_model=128,
-        num_heads=4,
-        d_ff=512,
-        max_seq_len=64,
-        alpha=0.9,
-        dropout=0.0,
-    )
+class CheckFailed(AssertionError):
+    pass
 
-    results = {}
 
-    # 1. Environment Check
-    try:
-        cuda_avail = torch.cuda.is_available()
-        results["Environment"] = "PASS"
-    except Exception as e:
-        print(f"Environment check failed: {e}")
-        results["Environment"] = "FAIL"
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise CheckFailed(message)
 
-    # 2. Model Check
-    try:
-        model_init = TesseractModel(**config, num_recursive_steps=4)
-        param_counts = count_parameters(model_init)
-        if param_counts["trainable"] > 0 and torch.isfinite(torch.tensor(param_counts["trainable"])):
-            results["Model"] = "PASS"
-        else:
-            results["Model"] = "FAIL"
-    except Exception as e:
-        print(f"Model check failed: {e}")
-        results["Model"] = "FAIL"
 
-    # 3. Forward Pass Check
-    try:
-        tokens = torch.randint(0, config["vocab_size"], (4, 16))
-        logits, state_history = model_init(tokens, return_states=True)
-        if logits.shape == (4, 16, config["vocab_size"]):
-            results["Forward"] = "PASS"
-        else:
-            results["Forward"] = "FAIL"
-    except Exception as e:
-        print(f"Forward check failed: {e}")
-        results["Forward"] = "FAIL"
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--device", default="auto")
+    parser.add_argument("--seed", type=int, default=42)
+    args = parser.parse_args()
 
-    # 4. K=1, 2, 4, 8 Checks
-    k_params = {}
-    k_results = {}
-    for k in [1, 2, 4, 8]:
+    proto = load_prototype_config()
+    cfg = proto.model
+    device = resolve_device(args.device)
+    set_seed(args.seed)
+    tokens = torch.randint(0, cfg.vocab_size, (PROBE_BATCH, PROBE_SEQ_LEN), device=device)
+    targets = torch.randint(0, cfg.vocab_size, (PROBE_BATCH, PROBE_SEQ_LEN), device=device)
+
+    models: Dict[int, TesseractModel] = {}
+    for k in K_VALUES:
+        set_seed(args.seed)
+        models[k] = TesseractModel.from_config(cfg, k).to(device)
+
+    def forward(k: int) -> None:
+        with torch.no_grad():
+            logits, _ = models[k].eval()(tokens)
+        require(logits.shape == (PROBE_BATCH, PROBE_SEQ_LEN, cfg.vocab_size), f"logits shape {tuple(logits.shape)}")
+        require(bool(torch.isfinite(logits).all()), "logits contain NaN/Inf")
+
+    def block_calls(k: int) -> None:
+        calls = []
+        handle = models[k].reasoner.shared_block.register_forward_hook(lambda *_: calls.append(1))
         try:
-            m = TesseractModel(**config, num_recursive_steps=k)
-            k_params[k] = count_parameters(m)["trainable"]
-            out, _ = m(tokens)
-            if out.shape == (4, 16, config["vocab_size"]) and not torch.isnan(out).any() and not torch.isinf(out).any():
-                results[f"K={k}"] = "PASS"
-            else:
-                results[f"K={k}"] = "FAIL"
-        except Exception as e:
-            print(f"K={k} check failed: {e}")
-            results[f"K={k}"] = "FAIL"
+            with torch.no_grad():
+                models[k].eval()(tokens)
+        finally:
+            handle.remove()
+        require(len(calls) == k, f"shared block executed {len(calls)} times, expected {k}")
 
-    # 5. Parameter Sharing Check
-    try:
-        # Verify single TransformerBlock instance
-        tb_count = sum(1 for m in model_init.modules() if isinstance(m, TransformerBlock))
-        if tb_count == 1:
-            results["Parameter sharing"] = "PASS"
-        else:
-            print(f"Parameter sharing check failed: TransformerBlock count is {tb_count}, expected 1")
-            results["Parameter sharing"] = "FAIL"
-    except Exception as e:
-        print(f"Parameter sharing check failed: {e}")
-        results["Parameter sharing"] = "FAIL"
-
-    # 6. Parameter Count Invariance Check
-    try:
-        p1 = k_params.get(1)
-        p2 = k_params.get(2)
-        p4 = k_params.get(4)
-        p8 = k_params.get(8)
-        if p1 == p2 == p4 == p8 and p1 is not None and p1 > 0:
-            results["Parameter count"] = "PASS"
-        else:
-            print(f"Parameter count invariance failed: K=1:{p1}, K=2:{p2}, K=4:{p4}, K=8:{p8}")
-            results["Parameter count"] = "FAIL"
-    except Exception as e:
-        print(f"Parameter count check failed: {e}")
-        results["Parameter count"] = "FAIL"
-
-    # 7. Numerical Stability Check
-    try:
-        targets = torch.randint(0, config["vocab_size"], (4, 16))
-        logits, _ = model_init(tokens)
-        loss = model_init.compute_loss(logits, targets)
-        if not torch.isnan(logits).any() and not torch.isinf(logits).any() and torch.isfinite(loss).item():
-            results["Numerical stability"] = "PASS"
-        else:
-            results["Numerical stability"] = "FAIL"
-    except Exception as e:
-        print(f"Numerical stability check failed: {e}")
-        results["Numerical stability"] = "FAIL"
-
-    # 8. Backward Pass Check
-    try:
-        model_init.zero_grad()
+    def backward(k: int) -> None:
+        model = models[k].train()
+        model.zero_grad(set_to_none=True)
+        logits, _ = model(tokens)
+        loss = model.compute_loss(logits, targets)
+        require(bool(torch.isfinite(loss)), f"loss is {loss.item()}")
         loss.backward()
-        grads_exist = True
-        grads_finite = True
-        grads_nonzero = False
-        for param in model_init.parameters():
-            if param.requires_grad:
-                if param.grad is None:
-                    grads_exist = False
-                else:
-                    if not torch.isfinite(param.grad).all():
-                        grads_finite = False
-                    if torch.abs(param.grad).sum() > 0:
-                        grads_nonzero = True
+        missing = [n for n, p in model.named_parameters() if p.grad is None]
+        require(not missing, f"parameters without gradient: {missing}")
+        require(all(bool(torch.isfinite(p.grad).all()) for p in model.parameters()), "non-finite gradients")
+        require(any(bool((p.grad != 0).any()) for p in model.parameters()), "all gradients are zero")
+        model.zero_grad(set_to_none=True)
 
-        if grads_exist and grads_finite and grads_nonzero:
-            results["Backward"] = "PASS"
-        else:
-            print(f"Backward check failed: exist={grads_exist}, finite={grads_finite}, nonzero={grads_nonzero}")
-            results["Backward"] = "FAIL"
-    except Exception as e:
-        print(f"Backward check failed: {e}")
-        results["Backward"] = "FAIL"
+    def bptt(k: int) -> None:
+        report = verify_bptt(models[k], tokens, targets)
+        require(report.passed, "; ".join(report.failures))
 
-    # Print validation table
-    print("========================================")
+    def invariance() -> None:
+        counts = {k: count_parameters(m)["trainable"] for k, m in models.items()}
+        require(len(set(counts.values())) == 1, f"parameter counts differ across K: {counts}")
+
+    def weight_sharing() -> None:
+        blocks = {k: sum(isinstance(mod, TransformerBlock) for mod in m.modules()) for k, m in models.items()}
+        require(set(blocks.values()) == {1}, f"TransformerBlock instances per model: {blocks}")
+        layouts = {k: [(n, tuple(p.shape)) for n, p in m.named_parameters()] for k, m in models.items()}
+        require(len({tuple(v) for v in layouts.values()}) == 1, "parameter layout differs across K")
+
+    checks: List[Tuple[str, Callable[[], None]]] = []
+    for k in K_VALUES:
+        checks += [
+            (f"K={k} forward", lambda k=k: forward(k)),
+            (f"K={k} block calls", lambda k=k: block_calls(k)),
+            (f"K={k} backward", lambda k=k: backward(k)),
+            (f"K={k} BPTT", lambda k=k: bptt(k)),
+        ]
+    checks += [("Parameter invariance", invariance), ("Weight sharing", weight_sharing)]
+
+    results: Dict[str, str] = {}
+    for name, check in checks:
+        try:
+            check()
+            results[name] = "PASS"
+        except Exception:  # report every failing check with its traceback, then keep going
+            traceback.print_exc()
+            results[name] = "FAIL"
+
+    params = count_parameters(models[K_VALUES[0]])["trainable"]
+    print("=" * 44)
     print("TESSERACT PROTOTYPE VALIDATION")
-    print("========================================")
-    print(f"{'Environment':<18} {results.get('Environment', 'FAIL')}")
-    print(f"{'Model':<18} {results.get('Model', 'FAIL')}")
-    print(f"{'Forward':<18} {results.get('Forward', 'FAIL')}")
-    print(f"{'K=1':<18} {results.get('K=1', 'FAIL')}")
-    print(f"{'K=2':<18} {results.get('K=2', 'FAIL')}")
-    print(f"{'K=4':<18} {results.get('K=4', 'FAIL')}")
-    print(f"{'K=8':<18} {results.get('K=8', 'FAIL')}")
-    print(f"{'Parameter sharing':<18} {results.get('Parameter sharing', 'FAIL')}")
-    print(f"{'Parameter count':<18} {results.get('Parameter count', 'FAIL')}")
-    print(f"{'Backward':<18} {results.get('Backward', 'FAIL')}")
-    print(f"{'Numerical stability':<18} {results.get('Numerical stability', 'FAIL')}")
-    print()
-
-    overall = "PASS" if all(v == "PASS" for v in results.values()) else "FAIL"
-    print(f"OVERALL: {overall}")
-    print("========================================")
-
-    if overall != "PASS":
-        sys.exit(1)
+    print("=" * 44)
+    print(f"Device: {device}   Trainable parameters: {params:,}")
+    print(f"Config: d_model={cfg.d_model} heads={cfg.num_heads} d_ff={cfg.d_ff} vocab={cfg.vocab_size}")
+    for name, status in results.items():
+        print(f"{name:<24} {status}")
+    overall = "PASS" if all(s == "PASS" for s in results.values()) else "FAIL"
+    print(f"\nOVERALL: {overall}")
+    print("=" * 44)
+    return 0 if overall == "PASS" else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

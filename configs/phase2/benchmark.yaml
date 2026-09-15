@@ -1,0 +1,31 @@
+# Phase 2 benchmark definition — PHASE2_BENCHMARK_DESIGN.md §4.
+# Every value here was fixed before any gate or model run. Do not change T, n,
+# the group or the task definitions in response to model performance.
+
+group: A5                     # primary benchmark group (non-solvable, order 60)
+ablation_groups: [Z60]        # group ladder (D30 is not implemented in this iteration)
+tasks: [main, c1_span, c2_word]
+n: 17                         # ring size (prime; > max(T)+1)
+t_values: [1, 2, 4, 8]
+k_values: [1, 2, 4, 8]
+interpolation_t_values: [3, 5, 6, 7]   # evaluation-only splits
+length_n: 33                  # length-generalisation test ring size
+
+data_seed: 1729               # root of all data SeedSequences (validation/test fixed across model seeds)
+val_size: 2048
+test_size: 10000
+length_test_size: 2000
+
+model_seeds: [0, 1, 2]
+tau: 0.9                      # K*(T) threshold on chance-normalised token accuracy (pre-registered)
+
+gates:
+  seed: 7
+  uniformity_states: 10000        # G1: output token distribution
+  uniformity_tv_max: 0.02         #     pass if total-variation distance to uniform <= this
+  cycle_states: 256               # G1: no repeated global state along F-trajectories...
+  cycle_steps: 1024               #     ...within this many steps
+  sensitivity_states: 4000        # G1: perturbing any single cell of the T+1 window
+  sensitivity_min: 0.9            #     must change y[i] in at least this fraction of cases
+  shortcut_states: 10000          # G2: F^T versus shallow candidate formulas (T >= 2)
+  shortcut_agreement_max: 0.05    #     pass if max token agreement <= this (chance = 1/60)

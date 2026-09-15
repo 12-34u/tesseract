@@ -1,32 +1,39 @@
 experiment:
   name: cellular_automaton
+  output_dir: cellular_automaton
   seed: 42
-  device: cpu
-task:
-  rule_number: 90
-  seq_len: 32
-  num_train: 256
-  num_val: 64
-  T_values:
-  - 1
-  - 2
-  - 4
-  - 8
+  device: auto
 model:
   vocab_size: 2
+  max_seq_len: 64
   d_model: 128
   num_heads: 4
   d_ff: 512
-  max_seq_len: 64
-  K_values:
+  alpha: 0.9
+  dropout: 0.0
+k_values:
+- 1
+- 2
+- 4
+- 8
+data:
+  rule_number: 90
+  seq_len: 32
+  t_values:
   - 1
   - 2
   - 4
   - 8
-  alpha: 0.9
-  dropout: 0.0
+  num_train: 256
+  num_val: 64
+  val_seed_offset: 1000
 training:
-  learning_rate: 0.001
+  optimizer:
+    name: adamw
+    learning_rate: 0.001
+    weight_decay: 0.01
+  batch_size: 64
   max_steps: 2000
   early_stop_loss: 0.005
-  batch_size: 64
+  eval_every: 200
+  eval_first_steps: 5

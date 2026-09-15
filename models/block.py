@@ -46,15 +46,19 @@ class TransformerBlock(nn.Module):
         )
 
         # Sublayer 2: Pre-LN + Feed-Forward Network
+        # The FFN output is NOT followed by dropout here: residual dropout is
+        # applied exactly once, by self.dropout in forward(). (A trailing
+        # Dropout previously applied it twice; no effect at dropout=0.0.)
+        # Module indices 0/3 are unchanged, so existing checkpoints still load.
         self.ln2 = nn.LayerNorm(d_model)
         self.ffn = nn.Sequential(
             nn.Linear(d_model, d_ff),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_ff, d_model),
-            nn.Dropout(dropout),
         )
 
+        # Residual dropout, shared by both sublayers.
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

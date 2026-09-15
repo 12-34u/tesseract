@@ -76,7 +76,7 @@ The Crucible experiment proved that Tesseract's recursive architecture can succe
 ---
 
 ### 15. What did the K-scaling experiment prove?
-It proved parameter invariance: the trainable parameter count remains exactly **210,832** across $K=1, 2, 4, 8$, while execution latency scales predictably from 1.32 ms to 9.54 ms.
+It proved parameter invariance: the trainable parameter count remains exactly **210,832** across $K=1, 2, 4, 8$, the shared block is measured to execute exactly K times, and forward latency increases with K. (Quote latency from the current `runs/k_scaling/results.csv`: it is machine-dependent wall-clock time, and earlier drafts cited values that no saved run reproduces.)
 
 ---
 

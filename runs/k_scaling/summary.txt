@@ -2,45 +2,40 @@
   TESSERACT K-SCALING EXPERIMENT — SUMMARY
 ============================================================
 
-  Research Question:
+  Research question:
     Does increasing K increase computational depth while
     leaving trainable parameter count unchanged?
 
-  Answer: YES
-
-  Constant parameter count: 210,832
-  Device: cpu
-  Architecture: d_model=128, heads=4, d_ff=512
+  Parameter invariance:   HOLDS — 210,832 trainable parameters for every K in [1, 2, 4, 8]
+  Shared-block calls:     measured with a forward hook; equal to K for every model
+  TransformerBlock count: 1 (identical state_dict layout, 18 tensors)
+  Device:                 cpu (12 torch threads)
+  Architecture:           d_model=128, heads=4, d_ff=512, vocab=16, alpha=0.9
+  Benchmark:              batch=16, seq_len=16, 10 warmup + 30 timed forward passes (no_grad)
 
   --------------------------------------------------
-     K |      Parameters |  Block Calls |   Latency (ms)
+     K |      Parameters |  Block Calls |  Median (ms)
   --------------------------------------------------
-     1 |         210,832 |            1 |           0.81
-     2 |         210,832 |            2 |           1.82
-     4 |         210,832 |            4 |           2.94
-     8 |         210,832 |            8 |           5.82
+     1 |         210,832 |            1 |         0.80
+     2 |         210,832 |            2 |         2.70
+     4 |         210,832 |            4 |         4.25
+     8 |         210,832 |            8 |         8.72
   --------------------------------------------------
+  Median latency strictly increasing with K: yes
+  Latency is wall-clock time on this machine, not a FLOP count.
 
-  Training Results (copy task, same initial weights):
-  ----------------------------------------------------------
-     K |  Init Loss | Final Loss |  Tok Acc |   EM Acc |  Steps
-  ----------------------------------------------------------
-     1 |     3.2446 |   0.009999 |   100.0% |   100.0% |     84
-     2 |     4.3291 |   0.009769 |   100.0% |   100.0% |     55
-     4 |     8.3859 |   0.009971 |   100.0% |   100.0% |     32
-     8 |    28.3127 |   0.005342 |   100.0% |   100.0% |     29
-  ----------------------------------------------------------
-
-  Note: Loss/accuracy differences on the copy task are
-  secondary diagnostics, not evidence that recursion
-  improves reasoning. The copy task can be solved
-  without iterative reasoning.
-
-  Conclusion:
-    Tesseract decouples trainable parameter count from
-    recursive computation depth: the same 210,832 parameter
-    model can execute the shared transformer block 1, 2, 4,
-    or 8 times, increasing computation without introducing
-    additional trainable parameters.
+  Training diagnostic (copy task, identical initial weights, full batch):
+  ------------------------------------------------------------------------
+     K |  Init Loss | Final Loss |  Tok Acc |   EM Acc |  Steps | Stop
+  ------------------------------------------------------------------------
+     1 |     3.2446 |   0.009999 |   100.0% |   100.0% |     84 | early_stop
+     2 |     4.3291 |   0.009769 |   100.0% |   100.0% |     55 | early_stop
+     4 |     8.3859 |   0.009971 |   100.0% |   100.0% |     32 | early_stop
+     8 |    28.3127 |   0.005342 |   100.0% |   100.0% |     29 | early_stop
+  ------------------------------------------------------------------------
+  Final loss/accuracy are from the last step's forward pass (before its update).
+  Initial loss grows with K (residual-stream growth, no final LayerNorm), so
+  steps-to-converge is confounded; the copy task needs no iteration. These are
+  secondary diagnostics, not evidence that recursion improves reasoning.
 
 ============================================================

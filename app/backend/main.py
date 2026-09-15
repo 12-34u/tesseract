@@ -1,43 +1,44 @@
-"""FastAPI Backend for Tesseract Evaluation Dashboard.
+"""FastAPI backend for the Tesseract evaluation dashboard.
 
-Exposes REST APIs reading experiment artifacts from runs/.
+Read-only REST API over experiment artifacts in the runs directory.
+Run from the repository root:
+
+    PYTHONPATH=app/backend python -m uvicorn main:app --host 127.0.0.1 --port 8000
+
+Environment:
+    TESSERACT_RUNS_DIR      artifact directory (default: <repo>/runs)
+    TESSERACT_CORS_ORIGINS  comma-separated allowed origins (default: Vite dev server)
 """
 
+import os
 import time
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
 from services.results_loader import ResultsLoader
+
+DEFAULT_CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
 
 app = FastAPI(
     title="Tesseract Evaluation Dashboard API",
-    description="Backend service serving Tesseract ML research prototype evaluation metrics.",
-    version="1.0.0",
+    description="Read-only view of Tesseract experiment artifacts.",
+    version="2.0.0",
 )
 
-# Enable CORS for local Vite frontend (port 5173 / 3000)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=[o.strip() for o in os.environ.get("TESSERACT_CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",") if o.strip()],
+    allow_methods=["GET"],
     allow_headers=["*"],
 )
 
 loader = ResultsLoader()
 
 
-@app.get("/")
-def root():
-    return {"message": "Tesseract Evaluation Dashboard API", "status": "running"}
-
-
 @app.get("/api/health")
 def get_health():
-    return {
-        "status": "ok",
-        "timestamp": time.time(),
-        "loader": "ready",
-    }
+    return {"status": "ok", "timestamp": time.time(), "runs_root": str(loader.runs_root)}
 
 
 @app.get("/api/summary")

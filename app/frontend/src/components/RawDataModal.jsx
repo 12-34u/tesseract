@@ -1,50 +1,45 @@
 import React, { useState } from 'react';
 import { X, Download } from 'lucide-react';
 
+const EXPERIMENT_LABELS = {
+  crucible: 'Crucible',
+  k_scaling: 'K-Scaling',
+  cellular_automaton: 'Cellular Automaton',
+};
+
+/** Shows artifact files exactly as written by the experiments (no re-serialisation). */
 export function RawDataModal({ isOpen, onClose, rawData }) {
-  const [activeTab, setActiveTab] = useState('k_scaling');
+  const [experiment, setExperiment] = useState('k_scaling');
+  const [fileName, setFileName] = useState(null);
 
   if (!isOpen) return null;
 
-  const exportCsv = (filename, content) => {
-    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+  const files = rawData?.[experiment] ?? {};
+  const names = Object.keys(files);
+  const activeFile = fileName && names.includes(fileName) ? fileName : names[0];
+  const content = activeFile ? files[activeFile] : null;
+
+  const download = () => {
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', filename);
+    link.setAttribute('download', `${experiment}_${activeFile}`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-  };
-
-  const getCsvContent = () => {
-    if (activeTab === 'final_results') {
-      return rawData?.final_results_csv || '';
-    }
-    const dataset = rawData?.[activeTab];
-    if (!dataset || !dataset.results) return JSON.stringify(dataset, null, 2);
-    
-    const results = dataset.results;
-    if (!results.length) return '';
-    const headers = Object.keys(results[0]).join(',');
-    const rows = results.map((r) => Object.values(r).join(',')).join('\n');
-    return `${headers}\n${rows}`;
+    URL.revokeObjectURL(url);
   };
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h3 style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>
-            Raw Experiment Results Artifacts (runs/)
-          </h3>
+          <h3 style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>Raw Experiment Artifacts</h3>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <button
-              className="btn btn-primary"
-              onClick={() => exportCsv(`${activeTab}_export.csv`, getCsvContent())}
-            >
+            <button className="btn btn-primary" onClick={download} disabled={typeof content !== 'string'}>
               <Download size={14} />
-              <span>Export CSV</span>
+              <span>Download</span>
             </button>
             <button className="btn" onClick={onClose}>
               <X size={16} />
@@ -52,38 +47,26 @@ export function RawDataModal({ isOpen, onClose, rawData }) {
           </div>
         </div>
 
-        <div style={{ padding: '0.75rem 1.25rem', borderBottom: '1px solid var(--border-color)' }}>
+        <div style={{ padding: '0.75rem 1.25rem', borderBottom: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           <div className="tab-group">
-            <button
-              className={`tab-btn ${activeTab === 'k_scaling' ? 'active' : ''}`}
-              onClick={() => setActiveTab('k_scaling')}
-            >
-              K-Scaling CSV
-            </button>
-            <button
-              className={`tab-btn ${activeTab === 'crucible' ? 'active' : ''}`}
-              onClick={() => setActiveTab('crucible')}
-            >
-              Crucible CSV
-            </button>
-            <button
-              className={`tab-btn ${activeTab === 'cellular_automaton' ? 'active' : ''}`}
-              onClick={() => setActiveTab('cellular_automaton')}
-            >
-              Cellular Automaton CSV
-            </button>
-            <button
-              className={`tab-btn ${activeTab === 'final_results' ? 'active' : ''}`}
-              onClick={() => setActiveTab('final_results')}
-            >
-              Final Results Matrix CSV
-            </button>
+            {Object.entries(EXPERIMENT_LABELS).map(([id, label]) => (
+              <button key={id} className={`tab-btn ${experiment === id ? 'active' : ''}`} onClick={() => { setExperiment(id); setFileName(null); }}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="tab-group">
+            {names.map((name) => (
+              <button key={name} className={`tab-btn mono ${activeFile === name ? 'active' : ''}`} onClick={() => setFileName(name)}>
+                {name}
+              </button>
+            ))}
           </div>
         </div>
 
         <div className="modal-body">
           <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-            {getCsvContent()}
+            {rawData ? (typeof content === 'string' ? content : `(${activeFile ?? 'file'} not present in this run)`) : '(raw data not loaded)'}
           </pre>
         </div>
       </div>

@@ -1,0 +1,37 @@
+{
+  "k": 4,
+  "passed": true,
+  "failures": [],
+  "loss": 0.007990705780684948,
+  "evaluated_on": "trained model after the final optimizer step; full training set; train mode",
+  "steps": [
+    {
+      "step": 1,
+      "grad_z_L_norm": 0.0013463537907227874,
+      "grad_z_H_norm": 0.0025548923294991255,
+      "z_L_norm": 257.91351318359375,
+      "z_H_norm": 25.97187042236328
+    },
+    {
+      "step": 2,
+      "grad_z_L_norm": 0.0010659614345058799,
+      "grad_z_H_norm": 0.0016366832423955202,
+      "z_L_norm": 541.4736328125,
+      "z_H_norm": 77.37969207763672
+    },
+    {
+      "step": 3,
+      "grad_z_L_norm": 0.0008995425305329263,
+      "grad_z_H_norm": 0.000817765889223665,
+      "z_L_norm": 876.563232421875,
+      "z_H_norm": 157.2631072998047
+    },
+    {
+      "step": 4,
+      "grad_z_L_norm": 0.000820459215901792,
+      "grad_z_H_norm": null,
+      "z_L_norm": 1291.5462646484375,
+      "z_H_norm": 270.6760559082031
+    }
+  ]
+}

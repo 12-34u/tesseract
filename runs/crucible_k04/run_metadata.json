@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "run_id": "crucible-20260915T065816Z",
+  "experiment": "crucible",
+  "status": "completed",
+  "verdict": "PASS",
+  "started_at": "2026-09-15T06:58:16+00:00",
+  "finished_at": "2026-09-15T06:58:17+00:00",
+  "config_file": "configs/crucible.yaml",
+  "seed": 42,
+  "device": {
+    "type": "cpu",
+    "torch_num_threads": 12
+  },
+  "environment": {
+    "python": "3.12.3",
+    "torch": "2.13.0+cpu",
+    "numpy": "2.5.2",
+    "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39"
+  },
+  "git": {
+    "commit": "7b141e9501bf7d1b143ddc083ce60411e0b463b2",
+    "dirty": true
+  },
+  "command": [
+    "/home/parth/Desktop/tesseract/experiments/crucible.py"
+  ],
+  "results": {
+    "k": 4,
+    "parameter_count": 210832,
+    "dataset": {
+      "task": "copy",
+      "num_examples": 16,
+      "seq_len": 16,
+      "vocab_size": 16
+    },
+    "initial_loss": 8.385885238647461,
+    "final_loss": 0.009970738552510738,
+    "final_token_accuracy": 100.0,
+    "final_exact_match_accuracy": 100.0,
+    "final_metrics_note": "final_* come from the last training step's forward pass, before its optimizer update (train mode)",
+    "post_training_eval": {
+      "token_accuracy": 100.0,
+      "exact_match_accuracy": 100.0
+    },
+    "training_steps": 32,
+    "stopped_reason": "early_stop",
+    "early_stop_loss": 0.01,
+    "parameter_update_delta_norm": 0.3392220437526703,
+    "pass_criteria": {
+      "max_final_loss": 0.1,
+      "min_exact_match": 90.0
+    },
+    "checks": {
+      "parameters_updated": true,
+      "loss_finite": true,
+      "loss_converged": true,
+      "exact_match_reached": true,
+      "bptt_gradients_ok": true
+    },
+    "verdict": "PASS"
+  },
+  "error": null
+}

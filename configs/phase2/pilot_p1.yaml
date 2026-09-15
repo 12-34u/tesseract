@@ -1,0 +1,47 @@
+# Pilot P1 (PHASE2_BENCHMARK_DESIGN.md §6). All values were fixed before the pilot ran.
+#
+# Stage A: calibrate the fixed step budget. Train Tesseract K=1 on the main A5
+#          task at T=1 until validation exact match >= 99 %.
+#          budget = 2 × steps-to-converge, rounded up to eval_every.
+# Stage B: floor check at that budget, with no early stopping: T=1/K=8, T=8/K=1,
+#          T=8/K=8. A cell is "at floor" when chance-normalised test token
+#          accuracy < 0.02.
+# The learning rate is NOT tuned here (the per-family sweep at T=2 is a grid prerequisite).
+
+experiment:
+  name: phase2_pilot_p1
+  output_dir: phase2/pilot_p1
+  seed: 0                    # model seed
+  device: auto
+
+model:
+  base: prototype_small      # Phase 1 architecture, unchanged except vocabulary
+  overrides:
+    vocab_size: 60
+
+benchmark: phase2/benchmark
+
+optimizer:
+  name: adamw
+  learning_rate: 0.001       # Phase 1 CA value; not tuned
+  weight_decay: 0.01
+
+batch_size: 128
+eval_every: 250
+eval_batch_size: 2048
+
+calibration:
+  family: tesseract
+  depth: 1
+  task: main
+  t: 1
+  max_steps: 20000
+  converge_exact_match: 99.0
+  budget_multiplier: 2
+
+floor_cells:
+  - {family: tesseract, depth: 8, task: main, t: 1}
+  - {family: tesseract, depth: 1, task: main, t: 8}
+  - {family: tesseract, depth: 8, task: main, t: 8}
+
+floor_threshold: 0.02

@@ -12,10 +12,10 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from models.embeddings import TokenPositionalEmbedding
 from models.recursive_core import RecursiveReasoner
+from utils.config import ModelConfig
 
 
 class TesseractModel(nn.Module):
@@ -70,6 +70,24 @@ class TesseractModel(nn.Module):
         # Loss function
         self.loss_fn = nn.CrossEntropyLoss()
 
+    @classmethod
+    def from_config(cls, config: ModelConfig, num_recursive_steps: int) -> "TesseractModel":
+        """Build a model from a validated :class:`ModelConfig` and recursive depth K."""
+        return cls(
+            vocab_size=config.vocab_size,
+            d_model=config.d_model,
+            num_heads=config.num_heads,
+            d_ff=config.d_ff,
+            max_seq_len=config.max_seq_len,
+            num_recursive_steps=num_recursive_steps,
+            alpha=config.alpha,
+            dropout=config.dropout,
+        )
+
+    @property
+    def num_recursive_steps(self) -> int:
+        return self.reasoner.num_recursive_steps
+
     def forward(
         self,
         tokens: torch.Tensor,
@@ -111,6 +129,11 @@ class TesseractModel(nn.Module):
         Returns:
             torch.Tensor: Scalar cross-entropy loss.
         """
+        if logits.ndim != 3 or targets.shape != logits.shape[:2]:
+            raise ValueError(
+                f"Expected logits [B, N, V] and targets [B, N]; got logits "
+                f"{list(logits.shape)} and targets {list(targets.shape)}."
+            )
         B, N, V = logits.shape
 
         # Reshape for CrossEntropyLoss: [B*N, V] and [B*N]

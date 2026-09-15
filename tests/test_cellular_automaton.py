@@ -326,3 +326,43 @@ class TestCellularAutomatonDataset:
             inp, tgt = ds[i]
             expected = simulate(inp.tolist(), 30, steps=2)
             assert tgt.tolist() == expected
+
+
+# ============================================================================
+# Independent ground truth and task-structure checks (audit)
+# ============================================================================
+
+
+def rule90_reference(x: torch.Tensor, steps: int) -> torch.Tensor:
+    """Independent Rule 90: new[i] = x[i-1] XOR x[i+1] with periodic wrap (no lookup table)."""
+    y = x.clone()
+    for _ in range(steps):
+        y = torch.roll(y, 1, dims=1) ^ torch.roll(y, -1, dims=1)
+    return y
+
+
+@pytest.mark.parametrize("t", range(0, 9))
+def test_rule90_targets_match_independent_reference(t):
+    ds = CellularAutomatonDataset(num_examples=64, seq_len=32, rule_number=90, steps=t, seed=123)
+    assert torch.equal(ds.targets, rule90_reference(ds.inputs, t))
+
+
+@pytest.mark.parametrize("t, two_cell", [(1, True), (2, True), (3, False), (4, True),
+                                         (5, False), (6, False), (7, False), (8, True)])
+def test_power_of_two_steps_reduce_to_two_cell_xor(t, two_cell):
+    """Rule 90 is linear over GF(2): for T = 2^m, target_i = x[i-T] XOR x[i+T].
+    Documents why T in {1, 2, 4, 8} does not grow the task's input dependency."""
+    ds = CellularAutomatonDataset(num_examples=64, seq_len=32, rule_number=90, steps=t, seed=7)
+    x = ds.inputs
+    assert torch.equal(ds.targets, torch.roll(x, t, dims=1) ^ torch.roll(x, -t, dims=1)) is two_cell
+
+
+def test_shipped_ca_config_train_and_val_are_disjoint():
+    from experiments.cellular_automaton import make_datasets
+    from utils.config import CellularAutomatonConfig, load_config
+
+    config = load_config("cellular_automaton", CellularAutomatonConfig)
+    for t in config.data.t_values:
+        train_ds, val_ds = make_datasets(config, t)  # raises on any overlap
+        assert len(train_ds) == config.data.num_train and len(val_ds) == config.data.num_val
+        assert not torch.equal(train_ds.inputs[: len(val_ds)], val_ds.inputs)
