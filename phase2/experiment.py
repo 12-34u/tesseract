@@ -160,6 +160,11 @@ def _execute_cell(config: Phase2ExperimentConfig, config_path: Path, device: tor
     if meta_path.is_file():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         if meta.get("status") == "completed" and (cell_dir / "result.json").is_file():
+            if meta.get("verdict") == "FAIL":
+                raise RuntimeError(
+                    f"{cell_dir} holds a FAILED run ({meta.get('run_id')}): training stopped on a non-finite loss, so "
+                    "the cell has no usable result. It is preserved; inspect it and decide explicitly before "
+                    "re-running. It is not silently treated as complete.")
             log(f"[skip] {cell.cell_id}: already completed ({meta.get('run_id')})")
             return json.loads((cell_dir / "result.json").read_text(encoding="utf-8")), "skipped_completed"
         raise RuntimeError(f"{cell_dir} holds an incomplete run (status={meta.get('status')}). It is preserved; "
@@ -195,14 +200,27 @@ def _validation_row(result: Dict) -> Dict:
     }
 
 
+def _number(value, spec: str = ".4f", missing: str = "n/a") -> str:
+    """Format a metric that may be absent.
+
+    A cell whose loss goes non-finite before the first evaluation has no
+    best_val/final_val at all. Formatting None with a float spec raises, which
+    would destroy the stage summary after the training itself had finished.
+    """
+    return missing if value is None else format(value, spec)
+
+
 def _stage_text(summary: Dict) -> str:
     lines = [f"PHASE 2 STAGE {summary['stage']['name']} — validation metrics only", "=" * 70,
              f"model_base={summary['model_base']} max_steps={summary['max_steps']} cells={len(summary['cells'])}"]
     for row in summary["validation_only"]:
-        lines.append(f"  {row['cell_id']}: best val norm {row['best_val_chance_normalised']:.4f} @ {row['best_step']}, "
-                     f"final val norm {row['final_val_chance_normalised']:.4f}, final val loss {row['final_val_loss']:.4f}, "
+        diverged = " [NON-FINITE LOSS]" if (row.get("non_finite") or {}).get("loss") else ""
+        lines.append(f"  {row['cell_id']}: best val norm {_number(row['best_val_chance_normalised'])} "
+                     f"@ {row['best_step'] if row['best_step'] is not None else 'n/a'}, "
+                     f"final val norm {_number(row['final_val_chance_normalised'])}, "
+                     f"final val loss {_number(row['final_val_loss'])}, "
                      f"calls {row['block_calls_per_forward']}, {row['parameter_count']:,} params, "
-                     f"{row['seconds_per_train_step'] * 1000:.1f} ms/step")
+                     f"{_number(row['seconds_per_train_step'] * 1000, '.1f')} ms/step{diverged}")
     if "stage1_review" in summary:
         review = summary["stage1_review"]
         lines.append(f"Stage review (T={review['t']}): {review['status']} → {review['action']}")
@@ -274,7 +292,9 @@ def analyze_experiment(config: Phase2ExperimentConfig, config_path: Path, device
         for cell in cells:
             cell_dir = cell_directory(run_dir, config.model_base, cell)
             meta_path = cell_dir / METADATA_FILENAME
-            complete = meta_path.is_file() and json.loads(meta_path.read_text())["status"] == "completed" \
+            meta = json.loads(meta_path.read_text()) if meta_path.is_file() else {}
+            # verdict FAIL means the run finished but diverged; it is not a usable result.
+            complete = meta.get("status") == "completed" and meta.get("verdict") != "FAIL" \
                 and (cell_dir / "result.json").is_file()
             if complete:
                 results.append(json.loads((cell_dir / "result.json").read_text(encoding="utf-8")))

@@ -97,3 +97,52 @@ def test_word_check_detects_a_wrong_transition():
     states = np.random.default_rng(0).integers(0, 60, size=(32, 17))
     from phase2.automaton import iterate
     assert not np.array_equal(iterate(get_group("A5"), states, 2), evaluate_word(table.T, states, symbolic_word(2)))
+
+
+# ---------------------------------------------------------------------------
+# The T = 2 span-control shortcut, cross-checked against implementation B
+# ---------------------------------------------------------------------------
+#
+# phase2/amendments.py owns the authoritative check (verify_involution_shortcut)
+# and Amendment 01 records the expected agreement. These tests add what that
+# check does not cover: confirmation from the *independent* Cayley table, and
+# confinement of the shortcut to the diagnostic T.
+
+
+def test_involution_count_from_the_independent_table_gives_the_amendment_figure():
+    """Amendment 01's 16/60 must also hold for implementation B's table.
+
+    F^2(s)[i] = s[i]·s[i+1]^2·s[i+2] collapses to the C1 span control exactly
+    when s[i+1]^2 = e. Deriving the count from the closure-generated table
+    checks the amendment's constant against a construction that shares no code
+    with the generator it documents.
+    """
+    from phase2.config import load_amendment
+
+    table = cayley_table_from_elements(generate_by_closure(A5_GENERATORS))
+    identity = next(e for e in range(60) if all(table[e][x] == x for x in range(60)))
+    involutions = sum(1 for x in range(60) if table[x][x] == identity)
+    assert involutions == 16
+    assert involutions / 60 == pytest.approx(4 / 15)
+
+    recorded = {s.t: s for s in load_amendment("phase2/amendment_01").documented_shortcuts}[2]
+    assert recorded.expected_token_agreement == pytest.approx(involutions / 60, abs=1e-12)
+
+
+def test_the_t2_shortcut_does_not_reach_the_primary_depth_conditions():
+    """The documented shortcut must stay confined to the diagnostic T.
+
+    Amendment 01 keeps T=2 as a diagnostic and rests the depth claim on
+    T = 4 and 8. That is only sound if the two-cell collapse does not recur
+    there, so this pins the agreement at the primary T values near chance.
+    """
+    from phase2.automaton import iterate
+    from phase2.config import load_amendment
+
+    amendment = load_amendment("phase2/amendment_01")
+    group = get_group("A5")
+    states = np.random.default_rng(5).integers(0, 60, size=(4000, 17))
+    for t in amendment.primary_depth_t_values:
+        span = group.table[states, np.roll(states, -t, axis=-1)]
+        agreement = (iterate(group, states, t) == span).mean()
+        assert agreement < 0.05, f"T={t} agreement {agreement:.4f} is not near chance (1/60)"

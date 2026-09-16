@@ -114,3 +114,59 @@ def test_build_model_reports_and_rejects(cfg):
 def test_match_parameters_rejects_impossible_target(cfg):
     with pytest.raises(ValueError):
         match_parameters(cfg, 8, 10)
+
+
+@pytest.mark.parametrize("family", ["tesseract", "unrolled", "param_matched", "width_scaled"])
+@pytest.mark.parametrize("depth", [1, 2, 4, 8])
+def test_declared_block_executions_equal_measured_calls(cfg, family, depth):
+    """block_executions is a compute claim; measure it instead of trusting it.
+
+    A forward hook on every TransformerBlock counts real executions, so a
+    Tesseract that silently stopped recursing, or a width_scaled model that
+    secretly ran more than one block, would fail here.
+    """
+    from models.block import TransformerBlock
+
+    built = build_model(family, depth, cfg, 17)
+    calls = []
+    handles = [m.register_forward_hook(lambda *_: calls.append(1))
+               for m in built.model.modules() if isinstance(m, TransformerBlock)]
+    try:
+        built.model(tokens())
+    finally:
+        for handle in handles:
+            handle.remove()
+    assert len(calls) == built.block_executions
+
+
+@pytest.mark.parametrize("k", [1, 2, 4, 8])
+def test_tesseract_reuses_exactly_one_block_object(cfg, k):
+    from models.block import TransformerBlock
+
+    built = build_model("tesseract", k, cfg, 17)
+    blocks = [m for m in built.model.modules() if isinstance(m, TransformerBlock)]
+    assert len(blocks) == 1
+    assert built.parameter_count == build_model("tesseract", 1, cfg, 17).parameter_count
+
+
+@pytest.mark.parametrize("layers", [2, 4, 8])
+def test_param_matched_records_and_keeps_its_head_confound(cfg, layers):
+    """The accepted confound must stay recorded, and stay reported honestly.
+
+    Amendment 02 D3 accepts that param_matched shrinks d_model to hit
+    Tesseract's parameter budget, which lowers the attention head dimension.
+    The same move also narrows the d_model x vocab output head, so the
+    baseline differs in read-out capacity too. Both are pinned here so a later
+    refactor cannot quietly drop the disclosure or "fix" the configuration.
+    """
+    tesseract = build_model("tesseract", layers, cfg, 17)
+    matched = build_model("param_matched", layers, cfg, 17)
+
+    assert matched.d_model < tesseract.d_model
+    assert matched.head_dim < tesseract.head_dim
+    assert matched.matched["head_dim"] == matched.head_dim
+    assert matched.matched["reference_head_dim"] == tesseract.head_dim
+    assert "head dimension" in matched.matched["known_confound"]
+
+    # The output head and embedding shrink with d_model, not just the heads.
+    assert matched.d_model * cfg.vocab_size < tesseract.d_model * cfg.vocab_size

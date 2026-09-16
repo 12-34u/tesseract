@@ -81,13 +81,19 @@ def delta(score_by_k: Mapping[int, Optional[float]], k_high: int, k_low: int) ->
 
 # Two-sided 95 % Student-t critical values by degrees of freedom.
 _T_CRITICAL_95 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262,
-                  10: 2.228, 15: 2.131, 20: 2.086, 30: 2.042}
+                  10: 2.228, 15: 2.131, 20: 2.086, 30: 2.042, 40: 2.021, 60: 2.000, 120: 1.980}
 
 
 def _t_critical(df: int) -> float:
-    if df > 30:
+    """Two-sided 95 % critical value, rounded down to the nearest tabulated df.
+
+    Rounding df down always picks a *larger* critical value, so an unlisted df
+    is never given a narrower interval than it deserves. Only beyond df = 120
+    is the normal limit used, where the difference from t is < 0.011.
+    """
+    if df > 120:
         return 1.96
-    return _T_CRITICAL_95[max(k for k in _T_CRITICAL_95 if k <= df)]  # conservative for unlisted df
+    return _T_CRITICAL_95[max(k for k in _T_CRITICAL_95 if k <= df)]
 
 
 def mean_ci95(values: Iterable[float]) -> Dict[str, Optional[float]]:

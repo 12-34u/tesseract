@@ -7,6 +7,17 @@
   isolates the effect of weight sharing.
 * ``param_matched``: unrolled with L blocks, and d_model/d_ff shrunk so that
   trainable parameters ≈ Tesseract's.
+
+  The accepted confound is recorded per model in ``matched["known_confound"]``
+  (attention head dimension; Amendment 02 D3), which is the single source of
+  truth. Shrinking d_model narrows two further things in the same move: the
+  token/positional embedding and the d_model × vocab output head (d_model =
+  128, 92, 64, 48 at L = 1, 2, 4, 8). So a param_matched baseline differs from
+  Tesseract in read-out capacity as well as in per-head width and weight
+  sharing, and a Tesseract win over it is not attributable to recursion alone.
+  This is accepted deliberately: holding d_model fixed makes an equal-parameter
+  comparison impossible. The width-scaled K=1 family is the control that moves
+  width in the other direction.
 * ``width_scaled``: Tesseract with K = 1 and d_ff enlarged so forward compute
   ≈ Tesseract at K = depth. The compute goes into width instead of depth.
 
@@ -110,6 +121,11 @@ def match_parameters(config: ModelConfig, num_layers: int, target: int) -> Tuple
     For each d_model (a multiple of num_heads, up to the prototype's), d_ff is
     solved exactly. The pair whose d_ff/d_model ratio is closest to the
     prototype's is chosen (larger d_model on ties).
+
+    Shrinking d_model also narrows the attention head dimension, the embedding
+    and the output head; see the module docstring and the ``known_confound``
+    field these models carry. Do not "fix" it here without re-approving the
+    baseline design.
     """
     ratio = config.d_ff / config.d_model
     best = None

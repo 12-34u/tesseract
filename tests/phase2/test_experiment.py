@@ -206,3 +206,55 @@ def test_cli_list_does_not_train(capsys):
     assert cli.main(["--list"]) == 0
     out = capsys.readouterr().out
     assert "total: 138 runs" in out and "PENDING_P1B" in out
+
+
+# ---------------------------------------------------------------------------
+# A cell that diverges must stay visible, never pass as a usable result
+# ---------------------------------------------------------------------------
+
+
+def _diverged_result(cell_id="tesseract_d8_A5_main_T8_s0"):
+    """A run whose loss went non-finite before the first evaluation."""
+    return {
+        "cell_id": cell_id,
+        "cell": {"family": "tesseract", "task": "main", "t": 8, "depth": 8, "seed": 0},
+        "steps_run": 3, "stopped_reason": "non_finite_loss", "best_step": None,
+        "best_val": None, "final_val": None, "best_val_loss": None, "final_val_loss": None,
+        "non_finite": {"loss": True, "gradient_norm_steps": 1},
+        "block_calls_per_forward": 8,
+        "model": {"parameter_count": 222140, "head_dim": 32, "forward_flops_per_sequence": 54330368},
+        "seconds_per_train_step": 0.1, "total_wall_seconds": 1.0,
+    }
+
+
+def test_stage_summary_survives_a_cell_with_no_validation_metrics():
+    """Formatting must not crash after the training has already been paid for."""
+    from phase2.experiment import _stage_text, _validation_row
+
+    summary = {"stage": {"name": "t8"}, "model_base": "prototype_small", "max_steps": 20000,
+               "cells": {"tesseract_d8_A5_main_T8_s0": "ran"},
+               "validation_only": [_validation_row(_diverged_result())]}
+    text = _stage_text(summary)
+    assert "n/a" in text
+    assert "NON-FINITE LOSS" in text
+
+
+def test_failed_cell_is_not_skipped_as_completed(tmp_path):
+    """status=completed with verdict=FAIL must raise, not count as done."""
+    import json as _json
+    from phase2.experiment import _execute_cell
+    from phase2.config import CellSpec
+    from utils.run_artifacts import METADATA_FILENAME
+
+    cell = CellSpec("tesseract", 8, "A5", "main", 8, 0)
+    cell_dir = tmp_path / "cells" / "prototype_small" / cell.cell_id
+    cell_dir.mkdir(parents=True)
+    (cell_dir / METADATA_FILENAME).write_text(_json.dumps(
+        {"status": "completed", "verdict": "FAIL", "run_id": "r1"}))
+    (cell_dir / "result.json").write_text(_json.dumps(_diverged_result(cell.cell_id)))
+
+    class _Cfg:
+        model_base = "prototype_small"
+
+    with pytest.raises(RuntimeError, match="FAILED run"):
+        _execute_cell(_Cfg(), tmp_path / "c.yaml", None, tmp_path, None, cell, {}, lambda *_: None)

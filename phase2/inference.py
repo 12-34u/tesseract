@@ -59,6 +59,21 @@ def _positive_and_excludes_zero(summary: Optional[Dict]) -> bool:
     return bool(summary) and summary["mean"] > 0 and summary.get("low") is not None and summary["low"] > 0
 
 
+def _pairing_coverage(expected_seeds: Iterable[int], per_seed: Dict[int, float]) -> Dict:
+    """Report seeds that were expected but produced no paired value.
+
+    A cell that diverged, or was never run, silently disappears from a paired
+    comparison and shrinks n without changing any number that is printed.
+    Recording the loss keeps a degraded seed set visible. This is reporting
+    only: it is deliberately not consumed by the decision rule, whose outcome
+    logic is pre-registered (Amendment 02 D1).
+    """
+    expected = sorted(expected_seeds)
+    dropped = [s for s in expected if s not in per_seed]
+    return {"seeds_expected": expected, "seeds_used": sorted(per_seed),
+            "seeds_dropped": dropped, "complete_pairing": not dropped}
+
+
 # ============================================================================
 # Paired effects
 # ============================================================================
@@ -73,8 +88,10 @@ def paired_delta(index: Dict[Key, Dict], family: str, task: str, t: int, k_high:
             a, b = test_score(high, checkpoint), test_score(low, checkpoint)
             if a is not None and b is not None:
                 per_seed[seed] = a - b
+    expected = sorted({k[4] for k in index if k[:3] == (family, task, t)})
     return {"family": family, "task": task, "t": t, "k_high": k_high, "k_low": k_low,
-            "per_seed": per_seed, "summary": _summary(per_seed.values())}
+            "per_seed": per_seed, "summary": _summary(per_seed.values()),
+            **_pairing_coverage(expected, per_seed)}
 
 
 def paired_did(index: Dict[Key, Dict], family: str, task: str, t_high: int, t_low: int, k_high: int, k_low: int,
@@ -83,7 +100,8 @@ def paired_did(index: Dict[Key, Dict], family: str, task: str, t_high: int, t_lo
     low = paired_delta(index, family, task, t_low, k_high, k_low, checkpoint)["per_seed"]
     per_seed = {s: high[s] - low[s] for s in high if s in low}
     return {"family": family, "task": task, "t_high": t_high, "t_low": t_low, "per_seed": per_seed,
-            "summary": _summary(per_seed.values())}
+            "summary": _summary(per_seed.values()),
+            **_pairing_coverage(sorted(set(high) | set(low)), per_seed)}
 
 
 def paired_cross(index: Dict[Key, Dict], a: Tuple[str, str, int, int], b: Tuple[str, str, int, int],
@@ -95,7 +113,8 @@ def paired_cross(index: Dict[Key, Dict], a: Tuple[str, str, int, int], b: Tuple[
         x, y = test_score(index[a + (s,)], checkpoint), test_score(index[b + (s,)], checkpoint)
         if x is not None and y is not None:
             per_seed[s] = x - y
-    return {"a": list(a), "b": list(b), "per_seed": per_seed, "summary": _summary(per_seed.values())}
+    return {"a": list(a), "b": list(b), "per_seed": per_seed, "summary": _summary(per_seed.values()),
+            **_pairing_coverage(seeds, per_seed)}
 
 
 # ============================================================================
@@ -158,11 +177,16 @@ def primary_regression(index: Dict[Key, Dict], family: str, task: str, primary_t
 def decision_rule(index: Dict[Key, Dict], rule: DecisionRuleConfig, checkpoint: str) -> Dict:
     t_low, t_high = min(rule.primary_t_values), max(rule.primary_t_values)
     kh, kl = rule.k_high, rule.k_low
-    main_delta_high = paired_delta(index, "tesseract", "main", t_high, kh, kl, checkpoint)["summary"]
-    main_did = paired_did(index, "tesseract", "main", t_high, t_low, kh, kl, checkpoint)["summary"]
-    c2_did = paired_did(index, "tesseract", "c2_word", t_high, t_low, kh, kl, checkpoint)["summary"]
-    c1_delta_low = paired_delta(index, "tesseract", "c1_span", t_low, kh, kl, checkpoint)["summary"]
-    c1_delta_high = paired_delta(index, "tesseract", "c1_span", t_high, kh, kl, checkpoint)["summary"]
+    main_delta_high_full = paired_delta(index, "tesseract", "main", t_high, kh, kl, checkpoint)
+    main_did_full = paired_did(index, "tesseract", "main", t_high, t_low, kh, kl, checkpoint)
+    c2_did_full = paired_did(index, "tesseract", "c2_word", t_high, t_low, kh, kl, checkpoint)
+    c1_delta_low_full = paired_delta(index, "tesseract", "c1_span", t_low, kh, kl, checkpoint)
+    c1_delta_high_full = paired_delta(index, "tesseract", "c1_span", t_high, kh, kl, checkpoint)
+    main_delta_high = main_delta_high_full["summary"]
+    main_did = main_did_full["summary"]
+    c2_did = c2_did_full["summary"]
+    c1_delta_low = c1_delta_low_full["summary"]
+    c1_delta_high = c1_delta_high_full["summary"]
 
     def scorer(r):
         return test_score(r, checkpoint)
@@ -199,9 +223,17 @@ def decision_rule(index: Dict[Key, Dict], rule: DecisionRuleConfig, checkpoint: 
         "outcome": outcome,
         "conditions": conditions,
         "flags": {"main_floor_at_T_high": main_floor_t_high, "main_ceiling_K_low_at_T_low": main_ceiling_t_low,
-                  "C1_span_effect": span, "C2_composition_at_least_main": composition, "complete": complete},
+                  "C1_span_effect": span, "C2_composition_at_least_main": composition, "complete": complete,
+                  # Reporting only; not consumed by the outcome logic above.
+                  "all_comparisons_fully_paired": all(
+                      c["complete_pairing"] for c in (main_delta_high_full, main_did_full, c2_did_full,
+                                                      c1_delta_low_full, c1_delta_high_full))},
         "summaries": {"main_delta_T_high": main_delta_high, "main_DiD": main_did, "C2_DiD": c2_did,
                       "C1_delta_T_low": c1_delta_low, "C1_delta_T_high": c1_delta_high},
+        "pairing": {name: {k: full[k] for k in ("seeds_expected", "seeds_used", "seeds_dropped", "complete_pairing")}
+                    for name, full in (("main_delta_T_high", main_delta_high_full), ("main_DiD", main_did_full),
+                                       ("C2_DiD", c2_did_full), ("C1_delta_T_low", c1_delta_low_full),
+                                       ("C1_delta_T_high", c1_delta_high_full))},
         "note": "baselines are interpretive only and do not enter this rule (Amendment 02 D1)",
     }
 

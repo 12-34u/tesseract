@@ -74,3 +74,17 @@ def test_interaction_regression_recovers_planted_effect():
     result = interaction_regression(rows)
     assert result["log2K_x_log2T"] == pytest.approx(0.05)
     assert result["log2K"] == pytest.approx(0.2) and result["log2T"] == pytest.approx(-0.3)
+
+
+def test_t_intervals_are_never_narrower_than_the_true_t_quantile():
+    """Unlisted degrees of freedom must round df down, not up to the normal limit."""
+    from phase2.metrics import _t_critical
+
+    assert _t_critical(2) == 4.303           # 3 seeds, the protocol's case
+    assert _t_critical(12) >= 2.179          # true t_.975(12)
+    assert _t_critical(35) >= 2.030          # true t_.975(35); previously 1.96
+    assert _t_critical(50) >= 2.009          # true t_.975(50); previously 1.96
+    assert _t_critical(100) >= 1.984         # true t_.975(100); previously 1.96
+    assert _t_critical(1000) == 1.96
+    for df in range(1, 200):
+        assert _t_critical(df) >= _t_critical(df + 1)

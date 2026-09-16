@@ -157,3 +157,62 @@ def test_duplicate_results_rejected():
     r = result("tesseract", "main", 4, 1, 0, 0.5)
     with pytest.raises(ValueError, match="duplicate"):
         index_results([r, r])
+
+
+# ---------------------------------------------------------------------------
+# A lost seed must be visible in every paired comparison
+# ---------------------------------------------------------------------------
+
+
+def _scored(family, task, t, depth, seed, score):
+    return {"cell": {"family": family, "task": task, "t": t, "depth": depth, "seed": seed},
+            "test": None if score is None else {"chance_normalised_token_accuracy": score},
+            "test_final": None, "model": {}, "best_val": None}
+
+
+def test_paired_delta_reports_a_seed_it_could_not_pair():
+    """A diverged cell shrinks n silently; the pairing record makes that visible."""
+    from phase2.inference import index_results, paired_delta
+
+    results = [_scored("tesseract", "main", 8, 8, s, None if s == 0 else 0.6) for s in (0, 1, 2)]
+    results += [_scored("tesseract", "main", 8, 1, s, 0.1) for s in (0, 1, 2)]
+    d = paired_delta(index_results(results), "tesseract", "main", 8, 8, 1, "best")
+
+    assert d["seeds_expected"] == [0, 1, 2]
+    assert d["seeds_used"] == [1, 2]
+    assert d["seeds_dropped"] == [0]
+    assert d["complete_pairing"] is False
+    assert d["summary"]["n"] == 2
+
+
+def test_pairing_is_complete_when_every_seed_has_both_cells():
+    from phase2.inference import index_results, paired_delta, paired_did
+
+    results = []
+    for t in (4, 8):
+        for depth, base in ((1, 0.1), (8, 0.6)):
+            results += [_scored("tesseract", "main", t, depth, s, base + 0.001 * s) for s in (0, 1, 2)]
+    index = index_results(results)
+    for report in (paired_delta(index, "tesseract", "main", 8, 8, 1, "best"),
+                   paired_did(index, "tesseract", "main", 8, 4, 8, 1, "best")):
+        assert report["complete_pairing"] is True
+        assert report["seeds_dropped"] == []
+
+
+def test_decision_rule_reports_pairing_without_changing_the_outcome():
+    """The pairing record is reporting only; D1's outcome logic is untouched."""
+    from phase2.config import load_amendment_02
+    from phase2.inference import decision_rule, index_results
+
+    rule = load_amendment_02().decision_rule
+    results = []
+    table = {("main", 4, 1): 0.30, ("main", 4, 8): 0.50, ("main", 8, 1): 0.10, ("main", 8, 8): 0.60,
+             ("c1_span", 4, 1): 0.50, ("c1_span", 4, 8): 0.50, ("c1_span", 8, 1): 0.50, ("c1_span", 8, 8): 0.50,
+             ("c2_word", 4, 1): 0.40, ("c2_word", 4, 8): 0.55, ("c2_word", 8, 1): 0.35, ("c2_word", 8, 8): 0.55}
+    for (task, t, depth), v in table.items():
+        results += [_scored("tesseract", task, t, depth, s, v + 0.001 * s) for s in (0, 1, 2)]
+
+    r = decision_rule(index_results(results), rule, "best")
+    assert r["outcome"] == "supports_sequential_depth_effect"
+    assert r["flags"]["all_comparisons_fully_paired"] is True
+    assert set(r["pairing"]) == {"main_delta_T_high", "main_DiD", "C2_DiD", "C1_delta_T_low", "C1_delta_T_high"}
