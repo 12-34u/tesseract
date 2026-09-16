@@ -1,0 +1,33 @@
+# P1b — balanced 2×2 capacity/learnability diagnostic (PHASE2_BENCHMARK_DESIGN.md §9).
+# Width {small, medium} × K {1, 8} at T=8, 20,000 fixed steps, validation only.
+# Every setting except model width and step budget matches configs/phase2/pilot_p1.yaml.
+# Not evidence for the depth hypothesis.
+
+experiment:
+  name: phase2_p1b_capacity
+  output_dir: phase2/p1b_capacity_diagnostic   # new directory; P1 artifacts are only read
+  seed: 0                                      # model seed (same as P1)
+  device: auto                                 # CPU-only torch in this environment
+
+benchmark: phase2/benchmark
+vocab_size: 60
+
+models:
+  - {name: small, base: prototype_small}             # Phase 1 config, unchanged (222,140 params)
+  - {name: medium, base: phase2/prototype_medium}    # width only (837,436 params)
+
+t: 8
+k_values: [1, 8]
+
+optimizer:
+  name: adamw
+  learning_rate: 0.001
+  weight_decay: 0.01
+
+batch_size: 128
+eval_every: 250
+eval_batch_size: 2048
+max_steps: 20000          # fixed; no early stopping
+floor_threshold: 0.02
+
+reference_pilot_output_dir: phase2/pilot_p1   # 1500-step P1 references (read-only)

@@ -1,0 +1,13 @@
+# Phase 2 P1b capacity-correction model (PHASE2_BENCHMARK_DESIGN.md §9).
+# Identical to configs/prototype_small.yaml (Phase 1, frozen) except width:
+#   d_model 128 → 256, num_heads 4 → 8 (head dim stays 32), d_ff 512 → 1024.
+# Trainable parameters at vocab_size=60: 837,436 (measured from the model; not a config value).
+
+model:
+  vocab_size: 16      # overridden per experiment (60 for A5)
+  max_seq_len: 64
+  d_model: 256
+  num_heads: 8
+  d_ff: 1024
+  alpha: 0.9          # EMA factor for z_H
+  dropout: 0.0

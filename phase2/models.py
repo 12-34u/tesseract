@@ -142,13 +142,15 @@ class BuiltModel:
     block_executions: int
     d_model: int
     d_ff: int
+    num_heads: int
+    head_dim: int
     parameter_count: int
     forward_flops_per_sequence: int
     matched: Optional[Dict]
 
     def describe(self) -> Dict:
-        return {k: getattr(self, k) for k in ("family", "depth", "block_executions", "d_model", "d_ff",
-                                              "parameter_count", "forward_flops_per_sequence", "matched")}
+        return {k: getattr(self, k) for k in ("family", "depth", "block_executions", "d_model", "d_ff", "num_heads",
+                                              "head_dim", "parameter_count", "forward_flops_per_sequence", "matched")}
 
 
 def build_model(family: str, depth: int, config: ModelConfig, n: int) -> BuiltModel:
@@ -165,7 +167,9 @@ def build_model(family: str, depth: int, config: ModelConfig, n: int) -> BuiltMo
         cfg = replace(config, d_model=d, d_ff=f)
         model, executions = UnrolledTransformer.from_config(cfg, depth), depth
         achieved = model_parameter_count(vocab, d, f, config.max_seq_len, depth)
-        matched = {"target_parameter_count": target, "relative_error": (achieved - target) / target}
+        matched = {"target_parameter_count": target, "relative_error": (achieved - target) / target,
+                   "head_dim": d // config.num_heads, "reference_head_dim": config.d_model // config.num_heads,
+                   "known_confound": "attention head dimension differs from Tesseract (accepted, Amendment 02 D3)"}
     elif family == "width_scaled":
         cfg = replace(config, d_ff=width_scaled_d_ff(config, depth, n))
         model, executions = TesseractModel.from_config(cfg, 1), 1
@@ -182,6 +186,8 @@ def build_model(family: str, depth: int, config: ModelConfig, n: int) -> BuiltMo
         block_executions=executions,
         d_model=cfg.d_model,
         d_ff=cfg.d_ff,
+        num_heads=cfg.num_heads,
+        head_dim=cfg.d_model // cfg.num_heads,
         parameter_count=count_parameters(model)["trainable"],
         forward_flops_per_sequence=forward_flops(cfg.d_model, cfg.d_ff, vocab, n, executions),
         matched=matched,

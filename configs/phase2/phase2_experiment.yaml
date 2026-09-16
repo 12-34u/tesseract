@@ -1,0 +1,77 @@
+# Phase 2 experiment (PHASE2_BENCHMARK_DESIGN.md §10; Amendment 01; Amendment 02 DRAFT).
+#
+# NOT FROZEN. model_base and max_steps are PENDING_P1B. scripts/phase2_experiment.py refuses
+# to train until both are set, Amendment 02 is frozen, the benchmark integrity check passes,
+# P1b has completed, and the stage is confirmed with --confirm-stage.
+
+experiment:
+  name: phase2_experiment
+  output_dir: phase2/experiment      # cells/<width>/<family_dK_group_task_T_seed>/ ; never overwritten
+  seed: 0                            # informational; each cell uses its own seed below
+  device: auto                       # CPU-only torch in the current environment
+
+benchmark: phase2/benchmark          # A5, n=17, data seed 1729, val 2048, test 10000 (unchanged)
+amendments: [phase2/amendment_01, phase2/amendment_02_draft]
+
+model_base: PENDING_P1B              # prototype_small or phase2/prototype_medium — chosen only after P1b
+max_steps: PENDING_P1B               # fixed step budget — chosen only after P1b (no early stopping)
+
+vocab_size: 60
+optimizer:                           # Amendment 02 D2: fixed for every family, no tuning
+  name: adamw
+  learning_rate: 0.001
+  weight_decay: 0.01
+batch_size: 128
+eval_every: 250
+eval_batch_size: 2048
+
+stages:
+  - name: t4
+    purpose: "Stage #1: T=4 intermediate depth; half of the primary inference; stop for review afterwards"
+    family: tesseract
+    tasks: [main]
+    t_values: [4]
+    depths: [1, 2, 4, 8]
+    seeds: [0, 1, 2]
+  - name: t8
+    purpose: "Stage #2: T=8 primary depth condition"
+    family: tesseract
+    tasks: [main]
+    t_values: [8]
+    depths: [1, 2, 4, 8]
+    seeds: [0, 1, 2]
+  - name: anchors
+    purpose: "T=1 anchor and T=2 diagnostic (Amendment 01); reported, excluded from the primary inference"
+    family: tesseract
+    tasks: [main]
+    t_values: [1, 2]
+    depths: [1, 2, 4, 8]
+    seeds: [0, 1, 2]
+  - name: controls
+    purpose: "C1 span control (depth 1) and C2 word control (log depth) at the primary T"
+    family: tesseract
+    tasks: [c1_span, c2_word]
+    t_values: [4, 8]
+    depths: [1, 2, 4, 8]
+    seeds: [0, 1, 2]
+  - name: unrolled
+    purpose: "Non-shared blocks, compute-matched to Tesseract K=L (L=1 is Tesseract K=1)"
+    family: unrolled
+    tasks: [main]
+    t_values: [4, 8]
+    depths: [2, 4, 8]
+    seeds: [0, 1, 2]
+  - name: param_matched
+    purpose: "Non-shared blocks, parameter-matched to Tesseract (head-dimension confound accepted, Amendment 02 D3)"
+    family: param_matched
+    tasks: [main]
+    t_values: [4, 8]
+    depths: [2, 4, 8]
+    seeds: [0, 1, 2]
+  - name: width_scaled
+    purpose: "K=1 with d_ff scaled so forward FLOPs match Tesseract K=8"
+    family: width_scaled
+    tasks: [main]
+    t_values: [4, 8]
+    depths: [8]
+    seeds: [0, 1, 2]

@@ -12,7 +12,6 @@ from phase2.config import (
     CellRunConfig,
     CellSpec,
     GatesRunConfig,
-    GridConfig,
     PilotCell,
     PilotConfig,
     TrainingConfig,
@@ -21,10 +20,8 @@ from phase2.config import (
 from phase2.data import SplitStore, TrainingStream, generate_split
 from phase2.models import build_model
 from phase2.runner import (
-    enumerate_grid_cells,
     require_gates_passed,
     run_cell,
-    run_grid,
     run_pilot,
     run_verification_and_gates,
 )
@@ -79,6 +76,17 @@ def test_fixed_budget_runs_every_step_and_evaluates_best_checkpoint():
     # The model left behind is the best checkpoint, and test was evaluated on it.
     assert evaluate_split(model, val, CPU, 60, 64) == outcome.best_val
     assert outcome.test.num_examples == 48 and outcome.test_predictions.shape == (48, 17)
+    assert outcome.best_val_loss > 0 and all("val_loss" in row for row in outcome.history)
+    assert outcome.gradient_norm_stats["non_finite_steps"] == 0 and outcome.gradient_norm_stats["max"] > 0
+    assert outcome.best_state is not None and outcome.final_state is not None
+
+
+def test_test_split_is_optional_and_never_used_for_selection():
+    val, _ = small_splits()
+    model = build_model("tesseract", 1, TINY_MODEL, 17).model
+    outcome = train_fixed_steps(model, TrainingStream("A5", "main", 1, 17, 8, 1729, 0), val, None,
+                                TrainingConfig(OPT, 8, 4, 2, 64), CPU, 60, log=lambda s: None)
+    assert outcome.test is None and outcome.test_predictions is None and outcome.best_step in (2, 4)
 
 
 def test_stop_condition_is_only_used_when_given():
@@ -133,7 +141,15 @@ def test_gates_run_then_cell_run(runs, tiny_benchmark):
     cell_cfg = CellRunConfig(experiment(runs, "cell"), TINY_MODEL, tiny_benchmark, TrainingConfig(OPT, 8, 4, 2, 64), cell)
     result = run_cell(cell_cfg, runs / "c.yaml", CPU, runs / "cell", log=lambda s: None)
     assert result["steps_run"] == 4 and result["stopped_reason"] == "budget"
-    assert 0.0 <= result["test_window_coverage"] <= 1.0
+    assert 0.0 <= result["window_coverage"] <= 1.0 and result["window_coverage_reference"] == "test inputs"
+    assert result["block_calls_per_forward"] == 2 and result["transformer_block_instances"] == 2
+    assert result["best_val_loss"] > 0 and result["non_finite"]["final_parameters_finite"]
+    assert result["bptt_on_best_checkpoint"]["passed"] and len(result["bptt_on_best_checkpoint"]["steps"]) == 2
+    assert result["bptt_on_final_checkpoint"]["passed"]
+    assert result["test"]["num_examples"] == 48 and result["test_final"]["num_examples"] == 48  # after training only
+    assert result["test_final_bootstrap_ci95"] is not None and result["model"]["head_dim"] == 8
+    for name in ("best", "final"):
+        assert (runs / "cell" / result["checkpoints"][name]["file"]).is_file()
     assert json.loads((runs / "cell" / "run_metadata.json").read_text())["verdict"] == "COMPLETED"
     # the cell used the frozen, checksummed splits
     store = SplitStore(runs / "phase2" / "splits", tiny_benchmark.data_seed)
@@ -162,27 +178,20 @@ def test_pilot_end_to_end(runs, tiny_benchmark):
     )
     report = run_pilot(pilot, runs / "p.yaml", CPU, runs / "pilot", benchmark=tiny_benchmark, gates_run_dir=gates_dir,
                        log=lambda s: None)
-    assert report["calibration"]["converged"] and report["calibration"]["steps_run"] == 2
-    assert report["fixed_step_budget"] == 4
-    assert [r["steps_run"] for r in report["floor_check"]] == [4]  # fixed budget, no early stopping
+    assert report["stage_a"]["converged"] and report["stage_a"]["steps_to_criterion"] == 2
+    assert report["fixed_step_budget"] == 4  # exactly 2 × steps-to-criterion
+    stage_b = report["stage_b"]
+    assert [r["steps_run"] for r in stage_b] == [4] and stage_b[0]["stopped_reason"] == "budget"  # no early stopping
+    assert stage_b[0]["block_calls_per_forward"] == 2 and stage_b[0]["test_evaluated"] is False
+    assert "at_floor" in stage_b[0] and stage_b[0]["best_val"]["per_position_accuracy"]
+    cell_result = json.loads((runs / "pilot" / "cells" / stage_b[0]["cell_id"] / "result.json").read_text())
+    assert cell_result["test"] is None and cell_result["test_final"] is None  # P1 never evaluates the test split
+    assert report["compute_environment"]["cpu_only"] == (not torch.cuda.is_available())
+    assert report["compute_environment"]["git"] is not None
     assert (runs / "pilot" / "pilot_report.json").is_file() and (runs / "pilot" / "summary.txt").is_file()
-
-
-def test_grid_is_guarded(runs, tiny_benchmark):
-    grid = load_config("phase2/grid", GridConfig)
-    with pytest.raises(RuntimeError, match="confirmation"):
-        run_grid(grid, runs / "grid.yaml", CPU, runs / "grid", confirm=False, benchmark=tiny_benchmark)
-    with pytest.raises(RuntimeError, match="No gate run"):
-        run_grid(grid, runs / "grid.yaml", CPU, runs / "grid", confirm=True, benchmark=tiny_benchmark)
-
-
-def test_full_grid_cell_count_matches_design():
-    grid = load_config("phase2/grid", GridConfig)
-    cells = enumerate_grid_cells(grid, load_benchmark())
-    tesseract_a5 = [c for c in cells if c.family == "tesseract" and c.group == "A5"]
-    assert len(tesseract_a5) == 144
-    assert len(cells) == 144 + 48 + 48 + 48 + 12
-    assert len({c.cell_id for c in cells}) == len(cells)
+    with pytest.raises(RuntimeError, match="already exists"):  # earlier pilot runs are preserved
+        run_pilot(pilot, runs / "p.yaml", CPU, runs / "pilot", benchmark=tiny_benchmark, gates_run_dir=gates_dir,
+                  log=lambda s: None)
 
 
 def test_shipped_phase2_configs_load():

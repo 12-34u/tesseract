@@ -7,11 +7,21 @@ without modifying it. Benchmark constants live in
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
+from typing import Optional
 
 from phase2.groups import BENCHMARK_GROUPS
 from phase2.tasks import TASKS
-from utils.config import ConfigError, ModelConfig, OptimizerConfig, RunConfig, load_config
+from utils.config import (
+    ConfigError,
+    ModelConfig,
+    OptimizerConfig,
+    RunConfig,
+    from_dict,
+    load_config,
+    load_yaml,
+    resolve_config_path,
+)
 
 FAMILIES = ("tesseract", "unrolled", "param_matched", "width_scaled")
 
@@ -121,7 +131,7 @@ class CalibrationConfig:
     t: int
     max_steps: int
     converge_exact_match: float  # validation exact match (%) that counts as converged
-    budget_multiplier: int  # fixed budget = multiplier × steps-to-converge (rounded up to eval_every)
+    budget_multiplier: int  # fixed budget = exactly multiplier × steps-to-criterion
 
 
 @dataclass(frozen=True)
@@ -147,18 +157,219 @@ class PilotConfig:
 
 
 @dataclass(frozen=True)
-class GridConfig:
+class ShortcutRecord:
+    group: str
+    task: str
+    t: int
+    identity: str
+    candidate: str  # name as produced by phase2.gates.shallow_candidates
+    condition: str
+    expected_token_agreement: float
+    tolerance: float
+
+
+@dataclass(frozen=True)
+class AmendmentConfig:
+    id: str
+    date: str
+    recorded_before_training: bool
+    original_gates_output_dir: str
+    summary: str
+    anchor_t_values: tuple[int, ...]
+    diagnostic_t_values: tuple[int, ...]
+    primary_depth_t_values: tuple[int, ...]
+    documented_shortcuts: tuple[ShortcutRecord, ...]
+
+    def __post_init__(self) -> None:
+        _require(self.recorded_before_training, "an amendment must be recorded before training")
+        roles = (set(self.anchor_t_values), set(self.diagnostic_t_values), set(self.primary_depth_t_values))
+        _require(sum(len(r) for r in roles) == len(set().union(*roles)), "T roles must be disjoint")
+        _require(all(s.t in self.diagnostic_t_values for s in self.documented_shortcuts),
+                 "documented shortcuts must be at diagnostic T values")
+
+    @property
+    def gate_verdict(self) -> str:
+        return f"PASS_WITH_{self.id.upper()}"
+
+
+@dataclass(frozen=True)
+class AmendedGatesRunConfig:
     experiment: RunConfig
-    model: ModelConfig
     benchmark: str
+    amendment: str
+
+
+def load_amendment(name_or_path: str = "phase2/amendment_01") -> AmendmentConfig:
+    return load_config(name_or_path, AmendmentConfig)
+
+
+@dataclass(frozen=True)
+class ModelVariant:
+    name: str  # label used in artifact paths, e.g. "small"
+    base: str  # model base config name or path, e.g. "prototype_small"
+
+
+@dataclass(frozen=True)
+class CapacityDiagnosticConfig:
+    """P1b (PHASE2_BENCHMARK_DESIGN.md §9): model width × K at one T, fixed steps, validation only."""
+
+    experiment: RunConfig
+    benchmark: str
+    vocab_size: int
+    models: tuple[ModelVariant, ...]
+    t: int
+    k_values: tuple[int, ...]
     optimizer: OptimizerConfig
     batch_size: int
     eval_every: int
     eval_batch_size: int
-    pilot_output_dir: str  # fixed step budget is read from this pilot's report
-    families: tuple[str, ...]
-    include_ablation_groups: bool
+    max_steps: int
+    floor_threshold: float
+    reference_pilot_output_dir: str
+
+    def __post_init__(self) -> None:
+        _require(len({m.name for m in self.models}) == len(self.models), "model variant names must be unique")
+        _require(self.max_steps > 0 and self.eval_every > 0 and self.batch_size > 0, "sizes must be positive")
+
+
+def resolve_model_variant(variant: ModelVariant, vocab_size: int) -> ModelConfig:
+    """Load a model base config, overriding only the vocabulary."""
+    base = load_yaml(resolve_config_path(variant.base)).get("model")
+    _require(isinstance(base, dict), f"{variant.base}: no 'model' mapping")
+    return from_dict(ModelConfig, {**base, "vocab_size": vocab_size}, f"{variant.base}:model")
 
 
 def load_benchmark(name_or_path: str = "phase2/benchmark") -> BenchmarkConfig:
     return load_config(name_or_path, BenchmarkConfig)
+
+
+# ============================================================================
+# Phase 2 experiment (PHASE2_BENCHMARK_DESIGN.md §10; Amendment 02 draft)
+# ============================================================================
+
+PENDING_P1B = "PENDING_P1B"
+
+
+class PendingP1BError(RuntimeError):
+    """A value that may only be chosen after P1b completes is still pending."""
+
+
+@dataclass(frozen=True)
+class StageSpec:
+    name: str
+    purpose: str
+    family: str
+    tasks: tuple[str, ...]
+    t_values: tuple[int, ...]
+    depths: tuple[int, ...]  # K for tesseract, L for non-shared, matched K for width_scaled
+    seeds: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        _require(self.family in FAMILIES, f"stage {self.name}: family must be one of {FAMILIES}")
+        _require(set(self.tasks) <= set(TASKS), f"stage {self.name}: tasks must be a subset of {TASKS}")
+        _require(all(t >= 1 for t in self.t_values) and all(d >= 1 for d in self.depths), f"stage {self.name}: T/depth >= 1")
+
+
+@dataclass(frozen=True)
+class Phase2ExperimentBase:
+    experiment: RunConfig
+    benchmark: str
+    amendments: tuple[str, ...]
+    vocab_size: int
+    optimizer: OptimizerConfig
+    batch_size: int
+    eval_every: int
+    eval_batch_size: int
+    stages: tuple[StageSpec, ...]
+
+    def __post_init__(self) -> None:
+        _require(len({s.name for s in self.stages}) == len(self.stages), "stage names must be unique")
+        _require(self.batch_size > 0 and self.eval_every > 0 and self.eval_batch_size > 0, "sizes must be positive")
+
+
+@dataclass(frozen=True)
+class Phase2ExperimentConfig(Phase2ExperimentBase):
+    model_base: Optional[str] = None  # None = PENDING_P1B
+    max_steps: Optional[int] = None  # None = PENDING_P1B
+
+    @property
+    def pending(self) -> list:
+        return [name for name in ("model_base", "max_steps") if getattr(self, name) is None]
+
+    def require_frozen(self) -> None:
+        if self.pending:
+            raise PendingP1BError(f"{self.pending} are still {PENDING_P1B}; they are chosen only after P1b completes "
+                                  "and is approved. No Phase 2 training can run.")
+
+    def stage(self, name: str) -> StageSpec:
+        for stage in self.stages:
+            if stage.name == name:
+                return stage
+        raise ConfigError(f"unknown stage {name!r}; available: {[s.name for s in self.stages]}")
+
+
+def load_phase2_experiment(name_or_path: str = "phase2/phase2_experiment") -> Phase2ExperimentConfig:
+    path = resolve_config_path(name_or_path)
+    raw = load_yaml(path)
+    values = {}
+    for key, kind in (("model_base", str), ("max_steps", int)):
+        _require(key in raw, f"{path.name}: missing {key!r} (write {PENDING_P1B!r} while pending)")
+        value = raw.pop(key)
+        if value == PENDING_P1B:
+            values[key] = None
+        else:
+            _require(type(value) is kind and (kind is str or value > 0), f"{path.name}: invalid {key}: {value!r}")
+            values[key] = value
+    base = from_dict(Phase2ExperimentBase, raw, path.name)
+    return Phase2ExperimentConfig(**{f.name: getattr(base, f.name) for f in fields(base)}, **values)
+
+
+@dataclass(frozen=True)
+class AmendmentDecision:
+    id: str
+    title: str
+    text: str
+
+
+@dataclass(frozen=True)
+class DecisionRuleConfig:
+    primary_t_values: tuple[int, ...]
+    k_low: int
+    k_high: int
+    ci_level: float
+    floor_threshold: float
+    tau: float
+    score: str
+
+    def __post_init__(self) -> None:
+        _require(len(self.primary_t_values) == 2, "the DiD rule needs exactly two primary T values")
+        _require(self.k_low < self.k_high, "k_low must be < k_high")
+        _require(self.ci_level == 0.95, "only 95 % t-intervals are implemented")
+
+
+@dataclass(frozen=True)
+class Stage1ReviewConfig:
+    t: int
+    floor_threshold: float
+    ceiling_tau: float
+
+
+@dataclass(frozen=True)
+class Amendment02Config:
+    id: str
+    date: str
+    status: str  # "draft" | "frozen"
+    frozen: bool
+    decisions: tuple[AmendmentDecision, ...]
+    decision_rule: DecisionRuleConfig
+    stage1_review: Stage1ReviewConfig
+    deviations: tuple[str, ...]
+    pending_p1b: str
+
+    def __post_init__(self) -> None:
+        _require(self.status in ("draft", "frozen"), "status must be 'draft' or 'frozen'")
+        _require(self.frozen == (self.status == "frozen"), "frozen flag must match status")
+
+
+def load_amendment_02(name_or_path: str = "phase2/amendment_02_draft") -> Amendment02Config:
+    return load_config(name_or_path, Amendment02Config)

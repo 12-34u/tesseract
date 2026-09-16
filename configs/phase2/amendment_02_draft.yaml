@@ -1,0 +1,74 @@
+# Phase 2 Amendment 02 — DRAFT / PRE-FREEZE (PHASE2_BENCHMARK_DESIGN.md §10).
+# Decisions D1–D3 were approved on 2026-09-15. The amendment is frozen only after
+# the model width and fixed step budget are approved following P1b. While
+# `frozen: false`, scripts/phase2_experiment.py refuses to train.
+
+id: amendment_02
+date: "2026-09-15"
+status: draft
+frozen: false
+
+decisions:
+  - id: D1
+    title: Z60 ladder dropped; §5 decision rule amended
+    text: >-
+      Z60 is removed from the experiment and from the decision rule. Supports a
+      sequential-depth effect only if (1) main Δ(8)=K8−K1 > 0 with a 95 % interval
+      excluding 0, (2) main DiD=Δ(8)−Δ(4) > 0 with an interval excluding 0, and
+      (3) the main task's mean DiD exceeds C2's while neither C1 Δ(4) nor C1 Δ(8)
+      has an interval excluding 0. Span explanation: a C1 Δ interval excludes 0.
+      Composition without depth: C2's DiD is at least the main task's.
+      Inconclusive: main floor for every K at T=8, K=1 ceiling at T=4, or a mixed
+      result. The baselines are interpretive only.
+  - id: D2
+    title: Per-family learning-rate sweep dropped
+    text: >-
+      AdamW, lr 1e-3, weight decay 0.01 for every family. No learning-rate tuning.
+      Baseline comparisons are conditional on this shared learning rate.
+  - id: D3
+    title: Parameter-matched head-dimension confound accepted
+    text: >-
+      The existing parameter matching (fixed heads, reduced head dimension) is kept
+      and recorded per run (head_dim, reference_head_dim) in every baseline table.
+  - id: D4
+    title: Deviations from the original §4 design
+    text: >-
+      The budget comes from P1b, not P1. Controls and baselines run only at T in
+      {4, 8}. Unrolled / param-matched L=1 are not run (identical to Tesseract
+      K=1). Test is evaluated after training only, on the best-validation
+      checkpoint (primary) and the final checkpoint (sensitivity). Lookup
+      coverage is reported analytically. T=1 and T=2 are excluded from the
+      primary inference.
+  - id: D5
+    title: P1b width and budget selection rules (declared before P1b completed)
+    text: >-
+      Learnable means some K has final chance-normalised validation accuracy
+      >= 0.02, a mean over the last 20 evaluations >= 0.02, and final validation
+      loss < ln 60. Width: the smallest learnable width, stating whether K=1 is at
+      the floor. Budget: the smallest multiple of 5,000 steps at which the
+      8-evaluation rolling mean reaches 90 % of its final value; or 20,000 marked
+      "not converged" if still rising. If neither width is learnable, do not
+      proceed.
+
+decision_rule:
+  primary_t_values: [4, 8]
+  k_low: 1
+  k_high: 8
+  ci_level: 0.95
+  floor_threshold: 0.02
+  tau: 0.9
+  score: "test chance-normalised token accuracy; best-validation checkpoint primary, final checkpoint sensitivity"
+
+stage1_review:
+  t: 4
+  floor_threshold: 0.02
+  ceiling_tau: 0.9
+
+deviations:
+  - "Z60 ladder removed (D1)"
+  - "no per-family learning-rate sweep (D2)"
+  - "parameter-matched head-dimension confound accepted (D3)"
+  - "budget from P1b; controls and baselines at T in {4, 8}; L=1 baselines reuse Tesseract K=1 (D4)"
+  - "test on best and final checkpoints after training only (D4)"
+
+pending_p1b: "model width (model_base) and fixed step budget (max_steps), plus the baseline sizes and runtimes that follow from them"

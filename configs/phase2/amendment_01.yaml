@@ -1,0 +1,33 @@
+# Phase 2 pre-training design amendment 01 (option A, approved).
+# Recorded BEFORE any model training. See PHASE2_BENCHMARK_DESIGN.md §8.
+#
+# Unchanged: group A5, n = 17, F(s)[i] = s[i]·s[i+1], T = {1, 2, 4, 8}, tasks,
+# splits, seeds, G1/G2 thresholds (configs/phase2/benchmark.yaml is not edited).
+# The original G2 failure (runs/phase2/gates) is preserved, never overwritten.
+
+id: amendment_01
+date: "2026-09-15"
+recorded_before_training: true
+original_gates_output_dir: phase2/gates
+
+summary: >-
+  G2 failed at T=2. F²(s)[i] = s[i]·s[i+1]²·s[i+2] equals the depth-1 formula
+  s[i]·s[i+2] exactly when s[i+1]² = e, which holds for 16 of the 60 elements of
+  A5, i.e. on 16/60 ≈ 26.7 % of tokens. The benchmark is kept unchanged. T=2 is
+  a reported diagnostic condition with an explicit shortcut baseline, and it is
+  excluded from the primary inference about increasing computational depth.
+  T=4 and T=8 are the primary depth conditions.
+
+anchor_t_values: [1]              # primitive; all tasks identical; reported, not a depth condition
+diagnostic_t_values: [2]          # reported with the shortcut baseline; excluded from primary inference
+primary_depth_t_values: [4, 8]    # the only T values used for the primary depth inference
+
+documented_shortcuts:
+  - group: A5
+    task: main
+    t: 2
+    identity: "F^2(s)[i] = s[i]*s[i+1]^2*s[i+2]"
+    candidate: "s[i+0]*s[i+2]"
+    condition: "s[i+1]^2 = e"
+    expected_token_agreement: 0.26666666666666666   # 16/60
+    tolerance: 0.01

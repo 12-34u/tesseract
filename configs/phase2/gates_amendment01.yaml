@@ -1,0 +1,13 @@
+# Re-run of verification + gates under Amendment 01.
+# Writes to a NEW directory; the original FAIL run in runs/phase2/gates is kept as-is.
+# Raw gate results are recomputed with unchanged code and thresholds, and must be
+# identical to the original run's. The amended verdict is evaluated separately.
+
+experiment:
+  name: phase2_gates_amendment01
+  output_dir: phase2/gates_amendment01
+  seed: 7
+  device: cpu
+
+benchmark: phase2/benchmark
+amendment: phase2/amendment_01
