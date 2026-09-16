@@ -13,7 +13,7 @@ import {
 import { fmtInt, fmtNum, isNum, MISSING, verdictStatus } from '../format';
 import { Provenance, Unavailable } from './Provenance';
 
-const TITLE = 'Crucible (Copy Task Overfitting & BPTT Verification)';
+const TITLE = 'Phase 1 · Crucible (Copy Task Overfitting & BPTT Verification)';
 
 export function CrucibleSection({ data, error }) {
   if (error || !data || data.status !== 'available') {

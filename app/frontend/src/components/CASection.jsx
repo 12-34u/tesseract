@@ -14,7 +14,7 @@ import {
 import { fmtInt, fmtNum, isNum, MISSING, uniqueSorted } from '../format';
 import { Provenance, Unavailable } from './Provenance';
 
-const TITLE = 'Cellular Automaton (Transformation Depth T × Recursive Depth K)';
+const TITLE = 'Phase 1 · Cellular Automaton (Rule 90, Transformation Depth T × Recursive Depth K)';
 const LINE_COLORS = ['#06b6d4', '#10b981', '#f59e0b', '#8b5cf6', '#f43f5e', '#3b82f6'];
 const METRIC_KEYS = {
   train: { exact_match: 'train_exact_match', token_acc: 'train_token_accuracy' },

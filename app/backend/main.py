@@ -16,6 +16,7 @@ import time
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from services.phase2_loader import Phase2Loader
 from services.results_loader import ResultsLoader
 
 DEFAULT_CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
@@ -34,6 +35,9 @@ app.add_middleware(
 )
 
 loader = ResultsLoader()
+# Phase 2 reads the same runs root. It is a separate loader so that a Phase 2
+# artifact problem can never affect the Phase 1 endpoints.
+phase2 = Phase2Loader(loader.runs_root)
 
 
 @app.get("/api/health")
@@ -69,3 +73,29 @@ def get_experiments():
 @app.get("/api/raw-results")
 def get_raw_results():
     return loader.get_raw_results()
+
+
+# ============================================================================
+# Phase 2 — pre-registration status and, once they exist, artifacts.
+# These endpoints are independent of the Phase 1 endpoints above.
+# ============================================================================
+
+
+@app.get("/api/phase2/status")
+def get_phase2_status():
+    return phase2.get_status()
+
+
+@app.get("/api/phase2/gates")
+def get_phase2_gates():
+    return phase2.get_gates()
+
+
+@app.get("/api/phase2/p1b")
+def get_phase2_p1b():
+    return phase2.get_p1b()
+
+
+@app.get("/api/phase2/results")
+def get_phase2_results():
+    return phase2.get_results()

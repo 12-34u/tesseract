@@ -10,6 +10,7 @@ import { CASection } from '../components/CASection';
 import { KeyFindings } from '../components/KeyFindings';
 import { StatusPanel } from '../components/StatusPanel';
 import { RawDataModal } from '../components/RawDataModal';
+import { Phase2Section } from '../components/Phase2Section';
 
 const ENDPOINTS = [
   ['summary', api.getSummary],
@@ -17,6 +18,7 @@ const ENDPOINTS = [
   ['kScaling', api.getKScaling],
   ['ca', api.getCellularAutomaton],
   ['raw', api.getRawResults],
+  ['phase2', api.getPhase2Status],
 ];
 
 /** Fetch every endpoint; one failing endpoint does not hide the others. */
@@ -32,8 +34,16 @@ async function fetchAll() {
   return { data, errors };
 }
 
+const VIEWS = ['overview', 'crucible', 'k_scaling', 'cellular_automaton', 'phase2'];
+
+/** The selected view is kept in the URL hash so a view can be linked to directly. */
+function initialView() {
+  const hash = typeof window === 'undefined' ? '' : window.location.hash.replace('#', '');
+  return VIEWS.includes(hash) ? hash : 'overview';
+}
+
 export function Dashboard() {
-  const [selectedExperiment, setSelectedExperiment] = useState('overview');
+  const [selectedExperiment, setSelectedExperiment] = useState(initialView);
   const [presentationMode, setPresentationMode] = useState(false);
   const [isRawDataOpen, setIsRawDataOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -55,11 +65,16 @@ export function Dashboard() {
     fetchAll().then(applyResult);
   }, []);
 
-  const { summary, crucible, kScaling, ca, raw } = data;
+  useEffect(() => {
+    if (typeof window !== 'undefined') window.location.hash = selectedExperiment;
+  }, [selectedExperiment]);
+
+  const { summary, crucible, kScaling, ca, raw, phase2 } = data;
   const counts = summary?.parameter_counts ?? [];
   const crucibleSummary = crucible?.summary;
   const errorList = Object.entries(errors);
-  const show = (id) => selectedExperiment === 'overview' || selectedExperiment === id;
+  const isPhase2 = selectedExperiment === 'phase2';
+  const show = (id) => !isPhase2 && (selectedExperiment === 'overview' || selectedExperiment === id);
 
   return (
     <div className={`dashboard-container ${presentationMode ? 'presentation-mode' : ''}`}>
@@ -98,7 +113,9 @@ export function Dashboard() {
         </div>
       )}
 
-      {!loading && (
+      {!loading && isPhase2 && <Phase2Section status={phase2} error={errors.phase2} />}
+
+      {!loading && !isPhase2 && (
         <>
           <div className="grid grid-cols-4" style={{ marginBottom: '1.5rem' }}>
             <MetricCard

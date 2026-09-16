@@ -25,10 +25,14 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 CONFIG_DIR = REPO_ROOT / "configs"
 RUNS_DIR_ENV = "TESSERACT_RUNS_DIR"
 
+# Display names. The phase prefix is part of the name because the dashboard
+# serves one repository across phases: the Phase 1 grid uses the same T and K
+# values as the Phase 2 design, so an unlabelled "T × K" heading invites a
+# reader to take Rule 90 results for the current A5 benchmark.
 EXPERIMENTS = {
-    "crucible": "Crucible (Copy Overfitting + BPTT)",
-    "k_scaling": "K-Scaling (Parameter Invariance + Latency)",
-    "cellular_automaton": "Cellular Automaton (T × K)",
+    "crucible": "Phase 1 · Crucible (Copy Overfitting + BPTT)",
+    "k_scaling": "Phase 1 · K-Scaling (Parameter Invariance + Latency)",
+    "cellular_automaton": "Phase 1 · Cellular Automaton (Rule 90, T × K)",
 }
 
 # Files the raw-data view may return. Fixed names only: no user-supplied paths.

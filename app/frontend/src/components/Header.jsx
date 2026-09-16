@@ -17,6 +17,9 @@ export function Header({
           TESSERACT
         </h1>
         <p>Transformer Engineered for Sequential State Evaluation and Recursive Action — Evaluation Dashboard</p>
+        <p className="mono" style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+          Phase 1 — completed / historical &nbsp;·&nbsp; Phase 2 — current research, pre-registration only
+        </p>
       </div>
 
       <div className="header-controls">
@@ -28,10 +31,11 @@ export function Header({
           value={selectedExperiment}
           onChange={(e) => setSelectedExperiment(e.target.value)}
         >
-          <option value="overview">Overview</option>
-          <option value="crucible">Crucible (Copy Task)</option>
-          <option value="k_scaling">K-Scaling</option>
-          <option value="cellular_automaton">Cellular Automaton</option>
+          <option value="overview">Phase 1 · Overview</option>
+          <option value="crucible">Phase 1 · Crucible (Copy Task)</option>
+          <option value="k_scaling">Phase 1 · K-Scaling</option>
+          <option value="cellular_automaton">Phase 1 · Cellular Automaton</option>
+          <option value="phase2">Phase 2 · Status &amp; Pre-registration</option>
         </select>
 
         <button className="btn" onClick={onRefresh} title="Re-read experiment files from runs/">

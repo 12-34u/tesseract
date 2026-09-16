@@ -13,7 +13,7 @@ import {
 import { fmtInt, fmtNum, isNum, MISSING } from '../format';
 import { Provenance, Unavailable } from './Provenance';
 
-const TITLE = 'K-Scaling & Computational Depth';
+const TITLE = 'Phase 1 · K-Scaling & Computational Depth';
 
 export function KScalingSection({ data, error }) {
   if (error || !data || data.status !== 'available') {

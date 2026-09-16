@@ -19,4 +19,10 @@ export const api = {
   getKScaling: () => fetchJson('/api/k-scaling'),
   getCellularAutomaton: () => fetchJson('/api/cellular-automaton'),
   getRawResults: () => fetchJson('/api/raw-results'),
+  // Phase 2. Independent of the Phase 1 endpoints: the status payload reports
+  // pending states for artifacts that do not exist yet.
+  getPhase2Status: () => fetchJson('/api/phase2/status'),
+  getPhase2Gates: () => fetchJson('/api/phase2/gates'),
+  getPhase2P1b: () => fetchJson('/api/phase2/p1b'),
+  getPhase2Results: () => fetchJson('/api/phase2/results'),
 };
