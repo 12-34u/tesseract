@@ -95,6 +95,58 @@ function DecisionCards({ decisions }) {
   );
 }
 
+function ModelFamiliesCard({ families, width }) {
+  if (!isAvailable(families)) return <Pending title="Model families" block={families} />;
+  return (
+    <div className="card" style={{ marginBottom: '1.5rem' }}>
+      <div className="card-title">
+        <span>Model families</span>
+        <span className={`badge ${families.selection_pending ? 'badge-warn' : 'badge-pass'}`}>
+          {families.selection_pending ? 'SELECTION PENDING P1B' : `SELECTED: ${families.selected_base}`}
+        </span>
+      </div>
+
+      <table className="matrix-table" style={{ marginTop: '0.75rem' }}>
+        <thead>
+          <tr>
+            <th>Family</th>
+            <th>Parameters</th>
+            <th>d_model</th>
+            <th>Heads</th>
+            <th>Head dim</th>
+            <th>d_ff</th>
+            <th>Results</th>
+          </tr>
+        </thead>
+        <tbody>
+          {families.families.map((f) => (
+            <tr key={f.name} style={f.selected ? { outline: '1px solid var(--accent-cyan)' } : undefined}>
+              <td>
+                {f.label}
+                {f.selected ? <span className="badge badge-pass" style={{ marginLeft: '0.5rem' }}>SELECTED</span> : null}
+              </td>
+              <td className="mono">{fmtInt(f.parameter_count)}</td>
+              <td className="mono">{f.d_model ?? MISSING}</td>
+              <td className="mono">{f.num_heads ?? MISSING}</td>
+              <td className="mono">{f.head_dim ?? MISSING}</td>
+              <td className="mono">{f.d_ff ?? MISSING}</td>
+              <td>
+                <span className="badge badge-warn">Pending Results</span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <div className="card-subtext" style={{ marginTop: '0.75rem' }}>
+        {families.note} Parameter counts are computed from each width&rsquo;s model config at vocab_size{' '}
+        {families.vocab_size ?? MISSING}; they are architecture sizes, not results. The width used for Phase 2 is{' '}
+        <strong>{width?.state ?? MISSING}</strong> and is chosen only after P1b.
+      </div>
+    </div>
+  );
+}
+
 function GatesCard({ gates }) {
   if (!isAvailable(gates)) {
     return <Pending title="Validity gates G1 / G2" block={gates} fallback="Awaiting gate artifacts" />;
@@ -399,7 +451,18 @@ export function Phase2Section({ status, error }) {
     );
   }
 
-  const { benchmark, t_roles: roles, protocol, decisions, gates, plan, p1b, results, provenance } = status;
+  const {
+    benchmark,
+    t_roles: roles,
+    protocol,
+    model_families: modelFamilies,
+    decisions,
+    gates,
+    plan,
+    p1b,
+    results,
+    provenance,
+  } = status;
   const ready = readiness(plan);
 
   return (
@@ -518,6 +581,8 @@ export function Phase2Section({ status, error }) {
       ) : (
         <Pending title="Training protocol" block={protocol} />
       )}
+
+      <ModelFamiliesCard families={modelFamilies} width={decisions?.model_width} />
 
       <h3 style={{ fontSize: '0.95rem', margin: '0 0 0.75rem', color: 'var(--text-secondary)' }}>
         Current decision state

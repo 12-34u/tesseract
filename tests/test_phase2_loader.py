@@ -355,3 +355,50 @@ def test_phase1_experiment_ids_are_unchanged(tmp_path):
 
     assert set(EXPERIMENTS) == {"crucible", "k_scaling", "cellular_automaton"}
     assert all(name.startswith("Phase 1 · ") for name in EXPERIMENTS.values())
+
+
+# ---------------------------------------------------------------------------
+# Model families in the dashboard payload
+# ---------------------------------------------------------------------------
+
+
+def test_model_families_are_listed_with_computed_parameter_counts(empty_runs):
+    families = empty_runs.get_model_families()
+    assert families["status"] == "available"
+    assert [f["name"] for f in families["families"]] == ["small", "medium", "large"]
+
+    by_name = {f["name"]: f for f in families["families"]}
+    assert by_name["small"]["label"] == "Small Prototype (222K)"
+    assert by_name["medium"]["label"] == "Medium Prototype (837K)"
+    assert by_name["large"]["label"] == "Large Research Model (~7M)"
+    assert by_name["large"]["d_model"] == 768 and by_name["large"]["head_dim"] == 32
+    assert all(f["parameter_count_is_constant_across_k"] for f in families["families"])
+    assert not families["errors"]
+
+
+def test_no_width_is_selected_while_the_choice_is_pending(empty_runs):
+    families = empty_runs.get_model_families()
+    assert families["selection_pending"] is True
+    assert families["selected_base"] is None
+    assert not any(f["selected"] for f in families["families"])
+
+
+def test_backend_parameter_formula_agrees_with_the_research_code(empty_runs):
+    """The dashboard must not drift from phase2.models."""
+    from phase2.config import MODEL_FAMILIES, ModelVariant, resolve_model_variant
+    from phase2.models import model_parameter_count
+    from services.phase2_loader import MODEL_FAMILY_CONFIGS, tesseract_parameter_count
+
+    assert [n for n, _, _ in MODEL_FAMILY_CONFIGS] == [f.name for f in MODEL_FAMILIES]
+    assert [b for _, b, _ in MODEL_FAMILY_CONFIGS] == [f.base for f in MODEL_FAMILIES]
+
+    by_name = {f["name"]: f for f in empty_runs.get_model_families()["families"]}
+    for family in MODEL_FAMILIES:
+        cfg = resolve_model_variant(ModelVariant(family.name, family.base), 60)
+        expected = model_parameter_count(60, cfg.d_model, cfg.d_ff, cfg.max_seq_len, 1)
+        assert tesseract_parameter_count(60, cfg.d_model, cfg.d_ff, cfg.max_seq_len) == expected
+        assert by_name[family.name]["parameter_count"] == expected == family.approx_parameters
+
+
+def test_model_families_appear_in_the_status_payload(empty_runs):
+    assert empty_runs.get_status()["model_families"]["status"] == "available"

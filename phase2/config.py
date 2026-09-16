@@ -210,6 +210,43 @@ class ModelVariant:
 
 
 @dataclass(frozen=True)
+class ModelFamily:
+    """One selectable Tesseract width.
+
+    Widths differ only in capacity. Every one of them is a single shared
+    TransformerBlock executed K times, so the trainable parameter count is
+    constant across K within a family. ``approx_parameters`` is documentation
+    at vocab_size=60; the authoritative count is always measured from the
+    instantiated model.
+    """
+
+    name: str
+    base: str
+    label: str
+    approx_parameters: int
+
+
+# The selectable model widths. ``model_base`` in a run config must name one of
+# these bases; nothing defaults to any of them, and the Phase 2 experiment keeps
+# model_base = PENDING_P1B until a width is approved after P1b.
+MODEL_FAMILIES: tuple[ModelFamily, ...] = (
+    ModelFamily("small", "prototype_small", "Small Prototype (222K)", 222_140),
+    ModelFamily("medium", "phase2/prototype_medium", "Medium Prototype (837K)", 837_436),
+    ModelFamily("large", "phase2/prototype_large", "Large Research Model (~7M)", 7_230_780),
+)
+
+MODEL_BASES: tuple[str, ...] = tuple(f.base for f in MODEL_FAMILIES)
+
+
+def model_family(base: str) -> ModelFamily:
+    """The registered family for a model base config, or a loud failure."""
+    for family in MODEL_FAMILIES:
+        if family.base == base or family.name == base:
+            return family
+    raise ConfigError(f"unknown model base {base!r}; registered bases are {list(MODEL_BASES)}")
+
+
+@dataclass(frozen=True)
 class CapacityDiagnosticConfig:
     """P1b (PHASE2_BENCHMARK_DESIGN.md §9): model width × K at one T, fixed steps, validation only."""
 

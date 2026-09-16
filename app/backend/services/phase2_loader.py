@@ -42,6 +42,16 @@ AMENDMENT_02_CONFIG = "amendment_02_draft.yaml"
 EXPERIMENT_CONFIG = "phase2_experiment.yaml"
 P1B_CONFIG = "capacity_diagnostic_p1b.yaml"
 
+# Selectable model widths, mirroring phase2.config.MODEL_FAMILIES. The backend
+# reads the YAML directly rather than importing the research package (which
+# would pull in numpy); test_phase2_loader pins this list and the parameter
+# formula below against phase2.config / phase2.models so the two cannot drift.
+MODEL_FAMILY_CONFIGS = (
+    ("small", "prototype_small", "Small Prototype"),
+    ("medium", "phase2/prototype_medium", "Medium Prototype"),
+    ("large", "phase2/prototype_large", "Large Research Model"),
+)
+
 # Run directories, relative to the runs root. These mirror the output_dir values
 # in the configs above; they are read from the configs where one exists.
 GATES_RAW_DIR = "phase2/gates"
@@ -80,6 +90,23 @@ MISSING_RESULTS_MESSAGE = (
     "No Phase 2 experiment results yet. Training is blocked until P1b completes and the model width, "
     "the step budget and Amendment 02 are approved."
 )
+
+
+def tesseract_parameter_count(vocab_size: int, d_model: int, d_ff: int, max_seq_len: int) -> int:
+    """Trainable parameters of a Tesseract model with ONE shared block.
+
+    Mirrors phase2.models.model_parameter_count at num_blocks=1. The count does
+    not depend on K: the single block is executed K times, never duplicated.
+    """
+    d, f = d_model, d_ff
+    block = 4 * d * d + 9 * d + f * (2 * d + 1)
+    return vocab_size * d + max_seq_len * d + block + 2 * d + d * vocab_size + vocab_size
+
+
+def _approx_label(count: int) -> str:
+    if count >= 1_000_000:
+        return f"~{count / 1_000_000:.0f}M"
+    return f"{round(count / 1000)}K"
 
 
 def _sha256(path: Path) -> Optional[str]:
@@ -185,6 +212,56 @@ class Phase2Loader:
             "primary_checkpoint": "best-validation checkpoint",
             "sensitivity_checkpoint": "final checkpoint",
             "test_policy": "test evaluated only after training completes",
+        }
+
+    # -- model families ---------------------------------------------------------
+
+    def get_model_families(self) -> Dict[str, Any]:
+        """The selectable Tesseract widths, with parameter counts computed from their configs.
+
+        Nothing here is an experimental result: these are architecture sizes
+        derived from checked-in model configs. The selected width for Phase 2 is
+        reported separately by ``decisions.model_width`` and stays PENDING_P1B
+        until approved.
+        """
+        experiment = self._config(EXPERIMENT_CONFIG)
+        selected = (experiment or {}).get("model_base")
+        vocab = (experiment or {}).get("vocab_size")
+
+        families, errors = [], []
+        for name, base, display in MODEL_FAMILY_CONFIGS:
+            path = REPO_ROOT / "configs" / f"{base}.yaml"
+            config = read_yaml(path)
+            model = (config or {}).get("model") if isinstance(config, dict) else None
+            if not isinstance(model, dict):
+                errors.append(f"{base}: no 'model' mapping")
+                continue
+            count = None
+            if vocab is not None and all(k in model for k in ("d_model", "d_ff", "max_seq_len")):
+                count = tesseract_parameter_count(vocab, model["d_model"], model["d_ff"], model["max_seq_len"])
+            families.append({
+                "name": name,
+                "base": base,
+                "label": display if count is None else f"{display} ({_approx_label(count)})",
+                "display": display,
+                "d_model": model.get("d_model"),
+                "num_heads": model.get("num_heads"),
+                "head_dim": (model["d_model"] // model["num_heads"]
+                             if model.get("d_model") and model.get("num_heads") else None),
+                "d_ff": model.get("d_ff"),
+                "parameter_count": count,
+                "parameter_count_is_constant_across_k": True,
+                "source": _rel(path),
+                "selected": selected == base,
+            })
+        return {
+            "status": "available" if families else "missing",
+            "families": families,
+            "errors": errors,
+            "vocab_size": vocab,
+            "selected_base": None if selected == PENDING_SENTINEL else selected,
+            "selection_pending": selected == PENDING_SENTINEL,
+            "note": "One shared TransformerBlock executed K times: the parameter count is identical for every K.",
         }
 
     # -- decision state ---------------------------------------------------------
@@ -565,6 +642,7 @@ class Phase2Loader:
             "phase": "PHASE 2 — CURRENT RESEARCH / IN PROGRESS",
             "configured": any(c["present"] for c in configs.values()),
             "benchmark": guarded(self.get_benchmark),
+            "model_families": guarded(self.get_model_families),
             "t_roles": guarded(self.get_t_roles),
             "protocol": guarded(self.get_protocol),
             "decisions": guarded(self.get_decisions),

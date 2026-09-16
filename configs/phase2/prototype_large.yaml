@@ -1,0 +1,24 @@
+# Phase 2 research-scale Tesseract model (PHASE2_BENCHMARK_DESIGN.md §6, "Scaling to ~6–7M parameters").
+# Identical to configs/prototype_small.yaml (Phase 1, frozen) except width:
+#   d_model 128 → 768, num_heads 4 → 24 (head dim stays 32), d_ff 512 → 3072.
+# Trainable parameters at vocab_size=60: 7,230,780 (measured from the model; not a config value).
+#
+# The family's two scaling invariants are preserved, as they were for
+# prototype_medium:
+#   * head dimension stays 32 (4 heads at d=128, 8 at d=256, 24 at d=768);
+#   * d_ff stays 4 × d_model.
+# Parameter count does not depend on num_heads, so the head count can be
+# changed without altering the parameter audit.
+#
+# Capacity is the only intended change. Recursion is still ONE shared
+# TransformerBlock executed K times, so the trainable parameter count is
+# identical for K ∈ {1, 2, 4, 8}.
+
+model:
+  vocab_size: 16      # overridden per experiment (60 for A5)
+  max_seq_len: 64
+  d_model: 768
+  num_heads: 24
+  d_ff: 3072
+  alpha: 0.9          # EMA factor for z_H
+  dropout: 0.0

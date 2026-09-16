@@ -198,3 +198,45 @@ describe('no hardcoded experimental values', () => {
     expect(source).not.toMatch(/\b\d{4,}\b/);
   });
 });
+
+describe('model family selector', () => {
+  // Shapes mirror /api/phase2/status.model_families. Parameter counts are
+  // architecture sizes computed by the backend from model configs, not results.
+  const families = {
+    status: 'available',
+    selection_pending: true,
+    selected_base: null,
+    vocab_size: 60,
+    families: [
+      { name: 'small', base: 'prototype_small', label: 'Small Prototype (222K)', d_model: 128, num_heads: 4, head_dim: 32, d_ff: 512, parameter_count: 222140, selected: false },
+      { name: 'medium', base: 'phase2/prototype_medium', label: 'Medium Prototype (837K)', d_model: 256, num_heads: 8, head_dim: 32, d_ff: 1024, parameter_count: 837436, selected: false },
+      { name: 'large', base: 'phase2/prototype_large', label: 'Large Research Model (~7M)', d_model: 768, num_heads: 24, head_dim: 32, d_ff: 3072, parameter_count: 7230780, selected: false },
+    ],
+  };
+
+  it('lists all three widths with the required labels', () => {
+    expect(isAvailable(families)).toBe(true);
+    expect(families.families.map((f) => f.label)).toEqual([
+      'Small Prototype (222K)',
+      'Medium Prototype (837K)',
+      'Large Research Model (~7M)',
+    ]);
+  });
+
+  it('marks nothing as selected while the width is pending', () => {
+    expect(families.selection_pending).toBe(true);
+    expect(families.selected_base).toBeNull();
+    expect(families.families.some((f) => f.selected)).toBe(false);
+  });
+
+  it('keeps head dimension constant across the family', () => {
+    expect(families.families.map((f) => f.head_dim)).toEqual([32, 32, 32]);
+    expect(families.families.map((f) => f.d_ff / f.d_model)).toEqual([4, 4, 4]);
+  });
+
+  it('renders as pending, not empty, when the backend has no family data', () => {
+    const missing = { status: 'missing', message: 'configs not found' };
+    expect(isAvailable(missing)).toBe(false);
+    expect(pendingMessage(missing)).toBe('configs not found');
+  });
+});
