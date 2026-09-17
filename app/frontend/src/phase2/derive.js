@@ -126,3 +126,120 @@ export function d5Summary(p1b) {
     budgetsAgree: budget.k_budgets_agree ?? null,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Capacity diagnostics: P1b (small, medium), P1b-2 (large), combined D5
+// ---------------------------------------------------------------------------
+
+/**
+ * Rows for the P1b / P1b-2 comparison grid.
+ *
+ * One row per candidate width and K, with the cell placed in the column of the
+ * diagnostic that owns it — P1b owns small and medium, P1b-2 owns large. A cell
+ * with no artifact yields `null`, never a placeholder number, so the view can
+ * only ever render a pending state for it.
+ */
+export function capacityGrid(capacity) {
+  if (!capacity) return { rows: [], columns: [] };
+  const columns = [
+    { key: 'p1b', label: 'P1b', block: capacity.p1b },
+    { key: 'p1b2', label: 'P1b-2', block: capacity.p1b2 },
+  ];
+  const byKey = new Map();
+  columns.forEach(({ key, block }) => {
+    (block?.cells || []).forEach((c) => byKey.set(`${key}/${c.width}/${c.k}`, c));
+  });
+
+  const rows = [];
+  columns.forEach(({ key, label, block }) => {
+    (block?.widths || []).forEach((width) => {
+      [1, 8].forEach((k) => {
+        rows.push({
+          width,
+          k,
+          owner: key,
+          ownerLabel: label,
+          cell: byKey.get(`${key}/${width}/${k}`) ?? null,
+          state: block?.status === 'available' ? 'complete' : 'pending',
+          pendingMessage: block?.message ?? null,
+        });
+      });
+    });
+  });
+  return { rows, columns };
+}
+
+/** True only when a capacity cell carries real recorded metrics. */
+export const hasCellMetrics = (cell) =>
+  Boolean(cell) && (cell.final_val_chance_normalised != null || cell.final_val_loss != null);
+
+/**
+ * The combined width-selection state.
+ *
+ * Returns `selectedWidth: null` unless the combined report exists AND D5 chose
+ * a width. Nothing here can mark a width as selected on its own — the verdict
+ * is read from the evaluator's artifact, never recomputed in the browser.
+ */
+export function widthSelection(capacity) {
+  const combined = capacity?.combined;
+  const decision = combined?.d5?.decision ?? null;
+  if (!decision) {
+    return {
+      state: combined?.state || 'WAITING FOR P1b + P1b-2',
+      awaiting: combined?.awaiting || [],
+      selectedWidth: null,
+      recommendedWidth: null,
+      recommendedMaxSteps: null,
+      outcome: null,
+      notConverged: null,
+      kLow: null,
+      kLowAtFloor: null,
+      override: null,
+      widths: [],
+      evaluatedOnce: Boolean(combined?.d5?.evaluated_once_on_combined_report),
+    };
+  }
+  const width = decision.width_decision || {};
+  const budget = decision.budget_decision || {};
+  return {
+    state: combined.state,
+    awaiting: [],
+    selectedWidth: width.selected_width ?? null,
+    recommendedWidth: width.selected_width ?? null,
+    recommendedMaxSteps: budget.recommended_max_steps ?? null,
+    outcome: width.outcome ?? null,
+    notConverged: budget.not_converged ?? null,
+    kLow: width.k_low ?? null,
+    kLowAtFloor: width.k_low_at_floor ?? null,
+    override: combined.override ?? null,
+    widths: decision.widths || [],
+    evaluatedOnce: Boolean(combined?.d5?.evaluated_once_on_combined_report),
+  };
+}
+
+/** Per-width, per-criterion pass/fail straight from the D5 decision. */
+export function d5CriteriaRows(capacity) {
+  const decision = capacity?.combined?.d5?.decision;
+  if (!decision) return [];
+  const rows = [];
+  (decision.widths || []).forEach((w) => {
+    Object.keys(w.per_k || {})
+      .map(Number)
+      .sort((a, b) => a - b)
+      .forEach((k) => {
+        const r = w.per_k[k];
+        rows.push({
+          width: w.width,
+          k,
+          parameterCount: w.parameter_count,
+          criteria: r.criteria || {},
+          learnable: Boolean(r.learnable),
+          widthLearnable: Boolean(w.learnable),
+          finalScore: r.final_val_chance_normalised ?? null,
+          tailMean: r.final_evaluations_mean ?? null,
+          finalLoss: r.final_val_loss ?? null,
+        });
+      });
+  });
+  return rows;
+}

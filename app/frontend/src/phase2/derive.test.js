@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   badgeClass,
+  capacityGrid,
+  d5CriteriaRows,
+  hasCellMetrics,
+  widthSelection,
   d5Summary,
   gateBadgeClass,
   isAvailable,
@@ -238,5 +242,166 @@ describe('model family selector', () => {
     const missing = { status: 'missing', message: 'configs not found' };
     expect(isAvailable(missing)).toBe(false);
     expect(pendingMessage(missing)).toBe('configs not found');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Capacity diagnostics: P1b / P1b-2 / combined D5
+// ---------------------------------------------------------------------------
+
+const PENDING_CAPACITY = {
+  status: 'available',
+  note: 'Large is an eligible candidate, not a selection. D5 recommends the smallest learnable width.',
+  p1b: { label: 'P1b — Original Capacity Diagnostic', widths: ['small', 'medium'], status: 'missing',
+         state: 'PENDING', tone: 'warn', message: 'P1b results not available yet.', cells: [] },
+  p1b2: { label: 'P1b-2 — Large Capacity Diagnostic', widths: ['large'], status: 'missing',
+          state: 'NOT STARTED', tone: 'warn',
+          message: 'P1b-2 has not started. Large is a candidate width awaiting its capacity diagnostic.',
+          cells: [], provenance_note: 'P1b-2 was introduced after the Large model family was added…' },
+  combined: { label: 'Combined D5 — Width Selection', status: 'missing', state: 'WAITING FOR P1b + P1b-2',
+              tone: 'warn', message: 'Width selection waiting for P1b + P1b-2.',
+              awaiting: ['P1b', 'P1b-2'], cells: [], d5: null },
+  candidate_widths: [
+    { name: 'small', label: 'Small Prototype (222K)', status: 'Candidate', diagnostic: 'P1b' },
+    { name: 'medium', label: 'Medium Prototype (837K)', status: 'Candidate', diagnostic: 'P1b' },
+    { name: 'large', label: 'Large Research Model (~7M)', status: 'Candidate — P1b-2 pending', diagnostic: 'P1b-2' },
+  ],
+};
+
+describe('capacity diagnostics — pending state', () => {
+  it('renders all six rows with no artifacts, none of them complete', () => {
+    const { rows } = capacityGrid(PENDING_CAPACITY);
+    expect(rows.map((r) => `${r.width}/K=${r.k}`)).toEqual([
+      'small/K=1', 'small/K=8', 'medium/K=1', 'medium/K=8', 'large/K=1', 'large/K=8',
+    ]);
+    expect(rows.every((r) => r.state === 'pending')).toBe(true);
+    expect(rows.every((r) => r.cell === null)).toBe(true);
+    expect(rows.every((r) => !hasCellMetrics(r.cell))).toBe(true);
+  });
+
+  it('places each width in the column of the diagnostic that owns it', () => {
+    const { rows } = capacityGrid(PENDING_CAPACITY);
+    const owner = Object.fromEntries(rows.map((r) => [r.width, r.owner]));
+    expect(owner).toEqual({ small: 'p1b', medium: 'p1b', large: 'p1b2' });
+  });
+
+  it('P1b and P1b-2 sections carry their own distinct states', () => {
+    expect(PENDING_CAPACITY.p1b.state).toBe('PENDING');
+    expect(PENDING_CAPACITY.p1b2.state).toBe('NOT STARTED');
+  });
+
+  it('shows Large as a candidate, never as selected', () => {
+    const large = PENDING_CAPACITY.candidate_widths.find((w) => w.name === 'large');
+    expect(large.status).toBe('Candidate — P1b-2 pending');
+    expect(PENDING_CAPACITY.candidate_widths.some((w) => /selected/i.test(w.status))).toBe(false);
+  });
+
+  it('width and budget stay pending while D5 has no artifact', () => {
+    const s = widthSelection(PENDING_CAPACITY);
+    expect(s.state).toBe('WAITING FOR P1b + P1b-2');
+    expect(s.selectedWidth).toBeNull();
+    expect(s.recommendedMaxSteps).toBeNull();
+    expect(s.awaiting).toEqual(['P1b', 'P1b-2']);
+    expect(d5CriteriaRows(PENDING_CAPACITY)).toEqual([]);
+  });
+
+  it('is still pending when only P1b has landed', () => {
+    const halfway = { ...PENDING_CAPACITY,
+      p1b: { ...PENDING_CAPACITY.p1b, status: 'available', state: 'COMPLETE' },
+      combined: { ...PENDING_CAPACITY.combined, awaiting: ['P1b-2'] } };
+    expect(widthSelection(halfway).selectedWidth).toBeNull();
+    expect(widthSelection(halfway).awaiting).toEqual(['P1b-2']);
+  });
+});
+
+describe('capacity diagnostics — completed state from fixture artifacts', () => {
+  const completeCell = (width, k, score, loss) => ({
+    width, k, source: width === 'large' ? 'P1b-2' : 'P1b',
+    final_val_chance_normalised: score, final_val_loss: loss,
+    final_val_token_accuracy: 50, final_val_exact_match: 1,
+    best_step: 20000, steps_run: 20000, at_floor_final: score < 0.02,
+  });
+
+  const COMPLETE = {
+    status: 'available',
+    note: PENDING_CAPACITY.note,
+    p1b: { ...PENDING_CAPACITY.p1b, status: 'available', state: 'COMPLETE',
+           cells: [completeCell('small', 1, 0.001, 4.6), completeCell('small', 8, 0.001, 4.6),
+                   completeCell('medium', 1, 0.4, 3.6), completeCell('medium', 8, 0.5, 3.6)] },
+    p1b2: { ...PENDING_CAPACITY.p1b2, status: 'available', state: 'COMPLETE',
+            cells: [completeCell('large', 1, 0.6, 3.5), completeCell('large', 8, 0.7, 3.5)] },
+    combined: {
+      label: 'Combined D5 — Width Selection', status: 'available', state: 'COMBINED', tone: 'ok',
+      awaiting: [], sources: [{ label: 'P1b', widths: ['small', 'medium'] }, { label: 'P1b-2', widths: ['large'] }],
+      single_seed_note: 'one seed per cell',
+      d5: {
+        status: 'available', evaluated_once_on_combined_report: true,
+        decision: {
+          width_decision: { outcome: 'SELECT', selected_width: 'medium', k_low: 1, k_low_at_floor: false },
+          budget_decision: { outcome: 'SELECT', recommended_max_steps: 15000, not_converged: false },
+          widths: [
+            { width: 'small', parameter_count: 222140, learnable: false,
+              per_k: { 1: { criteria: { a: false, b: false, c: false }, learnable: false },
+                       8: { criteria: { a: false, b: false, c: false }, learnable: false } } },
+            { width: 'medium', parameter_count: 837436, learnable: true,
+              per_k: { 1: { criteria: { a: true, b: true, c: true }, learnable: true },
+                       8: { criteria: { a: true, b: true, c: true }, learnable: true } } },
+            { width: 'large', parameter_count: 7230780, learnable: true,
+              per_k: { 1: { criteria: { a: true, b: true, c: true }, learnable: true },
+                       8: { criteria: { a: true, b: true, c: true }, learnable: true } } },
+          ],
+        },
+      },
+    },
+    candidate_widths: PENDING_CAPACITY.candidate_widths,
+  };
+
+  it('marks completed cells complete and pending cells pending', () => {
+    const { rows } = capacityGrid(COMPLETE);
+    expect(rows).toHaveLength(6);
+    expect(rows.every((r) => hasCellMetrics(r.cell))).toBe(true);
+  });
+
+  it('reads the width and budget from the D5 artifact', () => {
+    const s = widthSelection(COMPLETE);
+    expect(s.selectedWidth).toBe('medium');
+    expect(s.recommendedMaxSteps).toBe(15000);
+    expect(s.notConverged).toBe(false);
+    expect(s.kLowAtFloor).toBe(false);
+    expect(s.evaluatedOnce).toBe(true);
+  });
+
+  it('does not select Large even though Large is learnable', () => {
+    expect(widthSelection(COMPLETE).selectedWidth).not.toBe('large');
+  });
+
+  it('exposes per-width, per-criterion rows straight from the decision', () => {
+    const rows = d5CriteriaRows(COMPLETE);
+    expect(rows).toHaveLength(6);
+    expect(rows.map((r) => `${r.width}/${r.k}`)).toEqual([
+      'small/1', 'small/8', 'medium/1', 'medium/8', 'large/1', 'large/8',
+    ]);
+    expect(rows.filter((r) => r.learnable)).toHaveLength(4);
+  });
+
+  it('reports no override until one is recorded', () => {
+    expect(widthSelection(COMPLETE).override).toBeNull();
+  });
+
+  it('surfaces an override when the artifact records one', () => {
+    const withOverride = { ...COMPLETE,
+      combined: { ...COMPLETE.combined, override: { approved_width: 'large', reason: 'documented' } } };
+    expect(widthSelection(withOverride).override.approved_width).toBe('large');
+    expect(widthSelection(withOverride).recommendedWidth).toBe('medium');
+  });
+});
+
+describe('capacity helpers fabricate nothing', () => {
+  it('returns empty structures rather than defaults for absent input', () => {
+    expect(capacityGrid(undefined).rows).toEqual([]);
+    expect(hasCellMetrics(null)).toBe(false);
+    expect(hasCellMetrics({})).toBe(false);
+    expect(d5CriteriaRows(undefined)).toEqual([]);
+    expect(widthSelection(undefined).selectedWidth).toBeNull();
   });
 });

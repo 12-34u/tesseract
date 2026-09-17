@@ -96,6 +96,21 @@ def get_phase2_p1b():
     return phase2.get_p1b()
 
 
+@app.get("/api/phase2/p1b2")
+def get_phase2_p1b2():
+    return phase2.get_p1b2()
+
+
+@app.get("/api/phase2/capacity")
+def get_phase2_capacity():
+    return phase2.get_capacity_diagnostics()
+
+
+@app.get("/api/phase2/combined-capacity")
+def get_phase2_combined_capacity():
+    return phase2.get_combined_capacity()
+
+
 @app.get("/api/phase2/results")
 def get_phase2_results():
     return phase2.get_results()

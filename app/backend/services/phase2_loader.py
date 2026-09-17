@@ -25,13 +25,18 @@ import hashlib
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from services.results_loader import REPO_ROOT, ArtifactError, read_json, read_text, read_yaml
 
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from phase2.capacity_merge import (  # noqa: E402
+    CapacityMergeError,
+    load_source,
+    merge_capacity_reports,
+)
 from phase2.p1b_decision import D5DataError, evaluate_d5, render_d5_decision  # noqa: E402
 
 PHASE2_CONFIG_DIR = REPO_ROOT / "configs" / "phase2"
@@ -57,6 +62,7 @@ MODEL_FAMILY_CONFIGS = (
 GATES_RAW_DIR = "phase2/gates"
 GATES_AMENDED_DIR = "phase2/gates_amendment01"
 P1B_DIR = "phase2/p1b_capacity_diagnostic"
+P1B2_DIR = "phase2/p1b2_capacity_diagnostic"
 EXPERIMENT_DIR = "phase2/experiment"
 
 PENDING_SENTINEL = "PENDING_P1B"
@@ -86,6 +92,14 @@ FAMILY_LABELS = {
 
 MISSING_GATES_MESSAGE = "Awaiting gate artifacts — run scripts/phase2_gates.py, then scripts/phase2_gates_amended.py."
 MISSING_P1B_MESSAGE = "P1b results not available yet."
+MISSING_P1B2_MESSAGE = "P1b-2 has not started. Large is a candidate width awaiting its capacity diagnostic."
+WAITING_COMBINED_MESSAGE = "Width selection waiting for P1b + P1b-2. Neither width nor budget is selected."
+P1B2_PROVENANCE = (
+    "P1b-2 was introduced after the Large model family was added to the implementation. It does not alter "
+    "the original P1b data, protocol, or decision criteria. It supplies the same capacity diagnostic for the "
+    "newly introduced research-scale width so that D5 can evaluate all candidate widths under one selection "
+    "procedure."
+)
 MISSING_RESULTS_MESSAGE = (
     "No Phase 2 experiment results yet. Training is blocked until P1b completes and the model width, "
     "the step budget and Amendment 02 are approved."
@@ -329,31 +343,39 @@ class Phase2Loader:
 
     # -- P1b --------------------------------------------------------------------
 
-    def get_p1b_status(self) -> Dict[str, Any]:
-        run_dir = self.run_dir(P1B_DIR)
+    def get_p1b_status(self, relative: str = P1B_DIR, not_started: str = MISSING_P1B_MESSAGE) -> Dict[str, Any]:
+        run_dir = self.run_dir(relative)
         metadata = read_json(run_dir / "run_metadata.json")
         report_path = run_dir / "diagnostic_report.json"
         if metadata is None and not report_path.is_file():
-            return {"status": "pending", "state": "PENDING", "tone": "warn", "run_dir": P1B_DIR,
-                    "message": MISSING_P1B_MESSAGE, "run": None}
+            state = "NOT STARTED" if relative == P1B2_DIR else "PENDING"
+            return {"status": "pending", "state": state, "tone": "warn", "run_dir": relative,
+                    "message": not_started, "run": None}
         run_status = (metadata or {}).get("status")
         state = {"running": "RUNNING", "completed": "COMPLETE", "failed": "FAILED"}.get(run_status, "UNKNOWN")
         return {
             "status": "available",
             "state": state,
             "tone": {"COMPLETE": "ok", "RUNNING": "info", "FAILED": "fail"}.get(state, "warn"),
-            "run_dir": P1B_DIR,
+            "run_dir": relative,
             "run": metadata,
             "report_present": report_path.is_file(),
         }
 
-    def get_p1b(self) -> Dict[str, Any]:
-        """The P1b diagnostic and, when it is present, the pre-registered D5 decision."""
-        status = self.get_p1b_status()
-        run_dir = self.run_dir(P1B_DIR)
+    def get_p1b(self, relative: str = P1B_DIR, not_started: str = MISSING_P1B_MESSAGE,
+                with_d5: bool = True) -> Dict[str, Any]:
+        """One capacity diagnostic's cells, and for P1b alone its standalone D5 view.
+
+        ``relative`` selects P1b or P1b-2; both are the same diagnostic over
+        different widths, so they share this reader. The authoritative width
+        decision comes from the *combined* report, not from either alone.
+        """
+        status = self.get_p1b_status(relative, not_started)
+        run_dir = self.run_dir(relative)
         report_path = run_dir / "diagnostic_report.json"
         if not report_path.is_file():
-            return {**status, "status": "missing", "message": MISSING_P1B_MESSAGE, "report": None, "d5": None}
+            return {**status, "status": "missing", "message": not_started, "report": None, "d5": None,
+                    "cells": []}
 
         report = read_json(report_path)  # raises ArtifactError on malformed JSON
         if not isinstance(report, dict):
@@ -381,12 +403,13 @@ class Phase2Loader:
                     "at_floor_final": (run or {}).get("at_floor_final"),
                 })
 
-        d5: Dict[str, Any]
-        try:
-            decision = evaluate_d5(report)
-            d5 = {"status": "available", "decision": decision, "text": render_d5_decision(decision)}
-        except D5DataError as exc:
-            d5 = {"status": "error", "message": str(exc), "decision": None, "text": None}
+        d5: Optional[Dict[str, Any]] = None
+        if with_d5:
+            try:
+                decision = evaluate_d5(report)
+                d5 = {"status": "available", "decision": decision, "text": render_d5_decision(decision)}
+            except D5DataError as exc:
+                d5 = {"status": "error", "message": str(exc), "decision": None, "text": None}
 
         return {
             **status,
@@ -398,6 +421,123 @@ class Phase2Loader:
             "scope": report.get("scope"),
             "cells": cells,
             "d5": d5,
+        }
+
+    # -- P1b-2 and the combined capacity diagnostic ------------------------------
+
+    def get_p1b2_status(self) -> Dict[str, Any]:
+        return self.get_p1b_status(P1B2_DIR, MISSING_P1B2_MESSAGE)
+
+    def get_p1b2(self) -> Dict[str, Any]:
+        """P1b-2, the large-width capacity diagnostic.
+
+        No standalone D5: evaluating one diagnostic on its own would make the
+        width decision sequentially. D5 runs once, on the combined report.
+        """
+        payload = self.get_p1b(P1B2_DIR, MISSING_P1B2_MESSAGE, with_d5=False)
+        return {**payload, "provenance_note": P1B2_PROVENANCE,
+                "introduced_after": "the Large model family was added to the implementation"}
+
+    def get_combined_capacity(self) -> Dict[str, Any]:
+        """P1b + P1b-2 merged into one six-cell diagnostic, and D5 evaluated once on it.
+
+        Both sources must be present. Until then this reports the waiting state
+        rather than evaluating a partial pool, which would let the width be
+        chosen before every candidate had been diagnosed.
+        """
+        paths = {
+            "P1b": self.run_dir(P1B_DIR) / "diagnostic_report.json",
+            "P1b-2": self.run_dir(P1B2_DIR) / "diagnostic_report.json",
+        }
+        present = {label: path for label, path in paths.items() if path.is_file()}
+        awaiting = sorted(label for label in paths if label not in present)
+        base = {
+            "sources_expected": sorted(paths),
+            "sources_present": sorted(present),
+            "awaiting": awaiting,
+            "provenance_note": P1B2_PROVENANCE,
+        }
+        if awaiting:
+            return {**base, "status": "missing", "state": "WAITING FOR P1b + P1b-2", "tone": "warn",
+                    "message": WAITING_COMBINED_MESSAGE, "report": None, "cells": [], "d5": None}
+
+        try:
+            sources = [load_source(path, label) for label, path in sorted(paths.items())]
+            report = merge_capacity_reports(sources)
+        except CapacityMergeError as exc:
+            return {**base, "status": "error", "state": "MERGE FAILED", "tone": "fail",
+                    "message": str(exc), "report": None, "cells": [], "d5": None}
+
+        try:
+            decision = evaluate_d5(report)
+            d5 = {"status": "available", "decision": decision, "text": render_d5_decision(decision),
+                  "evaluated_once_on_combined_report": True}
+        except D5DataError as exc:
+            d5 = {"status": "error", "message": str(exc), "decision": None, "text": None,
+                  "evaluated_once_on_combined_report": True}
+
+        return {
+            **base,
+            "status": "available",
+            "state": "COMBINED",
+            "tone": "ok",
+            "message": None,
+            "settings": report.get("settings"),
+            "sources": report.get("sources"),
+            "cells": self._capacity_cells(report),
+            "provenance_by_width": report.get("provenance_by_width"),
+            "single_seed_note": report.get("single_seed_note"),
+            "decision_criteria_unchanged": report.get("decision_criteria_unchanged"),
+            "d5": d5,
+        }
+
+    @staticmethod
+    def _capacity_cells(report: Mapping) -> List[Dict[str, Any]]:
+        """Flatten a combined report's cells, carrying each one's source."""
+        provenance = report.get("provenance_by_width") or {}
+        rows = []
+        for width, per_k in (report.get("runs") or {}).items():
+            for k, run in sorted(per_k.items(), key=lambda kv: int(kv[0])):
+                headline = (run or {}).get("headline") or {}
+                rows.append({
+                    "width": width,
+                    "k": int(k),
+                    "source": (provenance.get(width) or {}).get("source"),
+                    "run_id": (provenance.get(width) or {}).get("run_id"),
+                    "parameter_count": headline.get("parameter_count"),
+                    "block_calls_per_forward": headline.get("block_calls_per_forward"),
+                    "steps_run": headline.get("steps_run"),
+                    "best_step": headline.get("best_step"),
+                    "best_val_chance_normalised": headline.get("best_val_chance_normalised"),
+                    "final_val_chance_normalised": headline.get("final_val_chance_normalised"),
+                    "final_val_loss": headline.get("final_val_loss"),
+                    "final_val_token_accuracy": headline.get("final_val_token_accuracy"),
+                    "final_val_exact_match": headline.get("final_val_exact_match"),
+                    "at_floor_best": (run or {}).get("at_floor_best"),
+                    "at_floor_final": (run or {}).get("at_floor_final"),
+                })
+        return rows
+
+    def get_capacity_diagnostics(self) -> Dict[str, Any]:
+        """The three capacity views the dashboard shows: P1b, P1b-2 and the combined D5."""
+        p1b, p1b2 = self.get_p1b(), self.get_p1b2()
+        combined = self.get_combined_capacity()
+        families = self.get_model_families()
+        candidate_widths = [
+            {"name": f["name"], "label": f["label"], "parameter_count": f["parameter_count"],
+             "diagnostic": "P1b-2" if f["name"] == "large" else "P1b",
+             "status": ("Candidate — P1b-2 pending"
+                        if f["name"] == "large" and p1b2.get("status") != "available"
+                        else "Candidate")}
+            for f in (families.get("families") or [])
+        ]
+        return {
+            "status": "available",
+            "p1b": {"label": "P1b — Original Capacity Diagnostic", "widths": ["small", "medium"], **p1b},
+            "p1b2": {"label": "P1b-2 — Large Capacity Diagnostic", "widths": ["large"], **p1b2},
+            "combined": {"label": "Combined D5 — Width Selection", **combined},
+            "candidate_widths": candidate_widths,
+            "note": "Large is an eligible candidate, not a selection. D5 recommends the smallest learnable width.",
         }
 
     # -- gates ------------------------------------------------------------------
@@ -525,6 +665,9 @@ class Phase2Loader:
         p1b = self.get_p1b_status()
         if p1b.get("state") != "COMPLETE":
             reasons.append(f"P1b is {p1b.get('state', 'PENDING')}")
+        p1b2 = self.get_p1b2_status()
+        if p1b2.get("state") != "COMPLETE":
+            reasons.append(f"P1b-2 is {p1b2.get('state', 'NOT STARTED')}")
         return reasons
 
     @staticmethod
@@ -643,6 +786,7 @@ class Phase2Loader:
             "configured": any(c["present"] for c in configs.values()),
             "benchmark": guarded(self.get_benchmark),
             "model_families": guarded(self.get_model_families),
+            "capacity_diagnostics": guarded(self.get_capacity_diagnostics),
             "t_roles": guarded(self.get_t_roles),
             "protocol": guarded(self.get_protocol),
             "decisions": guarded(self.get_decisions),

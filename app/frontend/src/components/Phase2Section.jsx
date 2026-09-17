@@ -2,7 +2,10 @@ import React from 'react';
 import { fmtInt, fmtNum, MISSING } from '../format';
 import {
   badgeClass,
+  capacityGrid,
+  d5CriteriaRows,
   d5Summary,
+  hasCellMetrics,
   gateBadgeClass,
   isAvailable,
   isError,
@@ -11,6 +14,7 @@ import {
   readiness,
   roleRows,
   stageBadgeClass,
+  widthSelection,
 } from '../phase2/derive';
 
 /**
@@ -142,6 +146,222 @@ function ModelFamiliesCard({ families, width }) {
         {families.note} Parameter counts are computed from each width&rsquo;s model config at vocab_size{' '}
         {families.vocab_size ?? MISSING}; they are architecture sizes, not results. The width used for Phase 2 is{' '}
         <strong>{width?.state ?? MISSING}</strong> and is chosen only after P1b.
+      </div>
+    </div>
+  );
+}
+
+function CapacityDiagnosticsCard({ capacity }) {
+  if (!capacity || capacity.status !== 'available') {
+    return <Pending title="Capacity diagnostics" block={capacity} />;
+  }
+  const { rows } = capacityGrid(capacity);
+  const selection = widthSelection(capacity);
+  const criteria = d5CriteriaRows(capacity);
+
+  const statusBadge = (block) => (
+    <span className={`badge ${badgeClass(block?.tone)}`}>{block?.state ?? 'UNKNOWN'}</span>
+  );
+
+  return (
+    <div className="card" style={{ marginBottom: '1.5rem' }}>
+      <div className="card-title">
+        <span>Capacity diagnostics</span>
+        <span className="badge badge-warn">LARGE IS A CANDIDATE, NOT A SELECTION</span>
+      </div>
+
+      {/* A. P1b   B. P1b-2 */}
+      <div className="grid grid-cols-2" style={{ marginTop: '0.75rem', marginBottom: '1rem' }}>
+        {[capacity.p1b, capacity.p1b2].map((block) => (
+          <div className="card" key={block.label}>
+            <div className="card-title">
+              <span>{block.label}</span>
+              {statusBadge(block)}
+            </div>
+            <div className="card-subtext">
+              Widths: <span className="mono">{(block.widths || []).join(', ')}</span> × K = 1, 8 · T = 8
+            </div>
+            {block.status !== 'available' ? (
+              <div className="card-subtext" style={{ marginTop: '0.4rem', color: 'var(--text-muted)' }}>
+                {block.message}
+              </div>
+            ) : (
+              <div className="card-subtext mono" style={{ marginTop: '0.4rem' }}>
+                {block.run_dir}
+              </div>
+            )}
+            {block.provenance_note ? (
+              <div className="card-subtext" style={{ marginTop: '0.5rem', color: 'var(--accent-amber)' }}>
+                ⚠ {block.provenance_note}
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+
+      {/* comparison grid: one row per width x K, in its owning diagnostic's column */}
+      <table className="matrix-table">
+        <thead>
+          <tr>
+            <th>Cell</th>
+            <th>P1b</th>
+            <th>P1b-2</th>
+            <th>Metrics (only if recorded)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => {
+            const metrics = hasCellMetrics(row.cell);
+            const badge = metrics ? (
+              <span className="badge badge-pass">COMPLETE</span>
+            ) : (
+              <span className="badge badge-warn">{row.owner === 'p1b2' ? 'NOT STARTED' : 'PENDING'}</span>
+            );
+            return (
+              <tr key={`${row.width}/${row.k}`}>
+                <td className="mono">
+                  {row.width} K={row.k}
+                </td>
+                <td>{row.owner === 'p1b' ? badge : ''}</td>
+                <td>{row.owner === 'p1b2' ? badge : ''}</td>
+                <td className="mono" style={{ fontSize: '0.78rem' }}>
+                  {metrics ? (
+                    <>
+                      val loss {fmtNum(row.cell.final_val_loss, 4)} · chance-norm{' '}
+                      {fmtNum(row.cell.final_val_chance_normalised, 4)}
+                      <br />
+                      token {fmtNum(row.cell.final_val_token_accuracy, 2, '%')} · EM{' '}
+                      {fmtNum(row.cell.final_val_exact_match, 2, '%')}
+                      <br />
+                      best step {row.cell.best_step ?? MISSING} · final step {row.cell.steps_run ?? MISSING}
+                      {row.cell.at_floor_final ? (
+                        <>
+                          {' '}
+                          <span className="badge badge-warn">AT FLOOR</span>
+                        </>
+                      ) : null}
+                    </>
+                  ) : (
+                    <span style={{ color: 'var(--text-muted)' }}>awaiting artifacts</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      {/* C. Combined D5 */}
+      <div className="card" style={{ marginTop: '1rem' }}>
+        <div className="card-title">
+          <span>{capacity.combined.label}</span>
+          <span className={`badge ${badgeClass(capacity.combined.tone)}`}>
+            {selection.selectedWidth
+              ? `RECOMMENDS ${selection.selectedWidth.toUpperCase()}`
+              : `Width Selection — ${selection.state}`}
+          </span>
+        </div>
+
+        {!selection.selectedWidth ? (
+          <>
+            <div className="card-subtext" style={{ marginTop: '0.4rem' }}>
+              {capacity.combined.message}
+            </div>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
+                gap: '1rem',
+                marginTop: '0.75rem',
+              }}
+            >
+              <Field label="Selected width" value="PENDING" />
+              <Field label="Selected budget" value="PENDING" />
+              <Field label="Awaiting" value={(selection.awaiting || []).join(', ') || MISSING} />
+            </div>
+          </>
+        ) : (
+          <>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
+                gap: '1rem',
+                marginTop: '0.5rem',
+              }}
+            >
+              <Field label="D5 recommendation" value={selection.recommendedWidth} />
+              <Field
+                label="Approved width"
+                value={selection.override?.approved_width ?? 'PENDING APPROVAL'}
+              />
+              <Field label="Override" value={selection.override ? 'YES' : 'none recorded'} />
+              <Field
+                label="Recommended max_steps"
+                value={
+                  selection.recommendedMaxSteps === null
+                    ? MISSING
+                    : `${fmtInt(selection.recommendedMaxSteps)}${selection.notConverged ? ' (not converged)' : ''}`
+                }
+              />
+              <Field
+                label={`K = ${selection.kLow ?? MISSING} at floor`}
+                value={selection.kLowAtFloor === null ? 'unknown' : String(selection.kLowAtFloor)}
+              />
+            </div>
+            {selection.override?.reason ? (
+              <div className="card-subtext" style={{ marginTop: '0.5rem' }}>
+                Override reason: {selection.override.reason}
+              </div>
+            ) : null}
+
+            <table className="matrix-table" style={{ marginTop: '0.75rem' }}>
+              <thead>
+                <tr>
+                  <th>Width</th>
+                  <th>K</th>
+                  <th>1. final ≥ 0.02</th>
+                  <th>2. last-20 mean ≥ 0.02</th>
+                  <th>3. loss &lt; ln 60</th>
+                  <th>Learnable</th>
+                </tr>
+              </thead>
+              <tbody>
+                {criteria.map((r) => {
+                  const marks = Object.values(r.criteria);
+                  return (
+                    <tr key={`${r.width}/${r.k}`}>
+                      <td className="mono">{r.width}</td>
+                      <td className="mono">{r.k}</td>
+                      {marks.map((ok, i) => (
+                        <td key={i}>
+                          <span className={`badge ${ok ? 'badge-pass' : 'badge-fail'}`}>{ok ? '✓' : '✗'}</span>
+                        </td>
+                      ))}
+                      <td>
+                        <span className={`badge ${r.learnable ? 'badge-pass' : 'badge-warn'}`}>
+                          {r.learnable ? 'yes' : 'no'}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+
+            <div className="card-subtext" style={{ marginTop: '0.5rem' }}>
+              Sources:{' '}
+              {(capacity.combined.sources || [])
+                .map((s) => `${s.label} (${(s.widths || []).join(', ')})`)
+                .join(' + ')}
+              . D5 was evaluated {selection.evaluatedOnce ? 'once on the combined report' : 'per report'}.
+            </div>
+          </>
+        )}
+
+        <div className="card-subtext" style={{ marginTop: '0.75rem', color: 'var(--accent-amber)' }}>
+          ⚠ {capacity.note} {capacity.combined.single_seed_note ? `${capacity.combined.single_seed_note}.` : ''}
+        </div>
       </div>
     </div>
   );
@@ -456,6 +676,7 @@ export function Phase2Section({ status, error }) {
     t_roles: roles,
     protocol,
     model_families: modelFamilies,
+    capacity_diagnostics: capacityDiagnostics,
     decisions,
     gates,
     plan,
@@ -589,6 +810,7 @@ export function Phase2Section({ status, error }) {
       </h3>
       <DecisionCards decisions={decisions} />
 
+      <CapacityDiagnosticsCard capacity={capacityDiagnostics} />
       <GatesCard gates={gates} />
       <PlanCard plan={plan} />
       <P1bCard p1b={p1b} />

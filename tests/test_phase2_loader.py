@@ -402,3 +402,169 @@ def test_backend_parameter_formula_agrees_with_the_research_code(empty_runs):
 
 def test_model_families_appear_in_the_status_payload(empty_runs):
     assert empty_runs.get_status()["model_families"]["status"] == "available"
+
+
+# ---------------------------------------------------------------------------
+# Capacity diagnostics: P1b, P1b-2, and the combined width selection
+# ---------------------------------------------------------------------------
+
+
+def _write_capacity(runs_root: Path, relative: str, widths: dict, run_id: str, status="completed"):
+    """widths: {name: (parameter_count, learnable)}"""
+    import math
+
+    good, bad = math.log(60) - 0.5, math.log(60) + 0.5
+    d = runs_root / relative
+    d.mkdir(parents=True, exist_ok=True)
+
+    def cell(p, ok):
+        score = 0.5 if ok else 0.001
+        return {"model_base": "x", "at_floor_best": not ok, "at_floor_final": not ok,
+                "curve": [{"step": float((i + 1) * 250), "val_chance_normalised_token_accuracy": score}
+                          for i in range(80)],
+                "headline": {"parameter_count": p, "final_val_chance_normalised": score,
+                             "final_val_loss": good if ok else bad, "best_val_chance_normalised": score,
+                             "steps_run": 20000, "best_step": 20000, "block_calls_per_forward": 1,
+                             "final_val_token_accuracy": 50.0, "final_val_exact_match": 1.0}}
+
+    (d / "diagnostic_report.json").write_text(json.dumps({
+        "settings": {"t": 8, "n": 17, "k_values": [1, 8], "seed": 0,
+                     "optimizer": {"name": "adamw", "learning_rate": 0.001, "weight_decay": 0.01},
+                     "batch_size": 128, "eval_every": 250, "max_steps": 20000, "early_stopping": False,
+                     "test_split_evaluated": False, "floor_threshold": 0.02,
+                     "chance_level_val_loss_ln_vocab": math.log(60)},
+        "model_configs": {n: {"d_model": 1} for n in widths},
+        "single_seed_note": "one seed per cell: differences are descriptive, not statistical claims",
+        "gates_run_id": "g", "gates_verdict": "PASS_WITH_AMENDMENT_01",
+        "runs": {n: {"1": cell(p, ok), "8": cell(p, ok)} for n, (p, ok) in widths.items()},
+    }), encoding="utf-8")
+    (d / "run_metadata.json").write_text(json.dumps(
+        {"run_id": run_id, "status": status, "verdict": "COMPLETED",
+         "git": {"commit": "abc1234", "dirty": False}}), encoding="utf-8")
+
+
+SMALL_P, MEDIUM_P, LARGE_P = 222_140, 837_436, 7_230_780
+
+
+def test_p1b2_config_is_loadable_and_mirrors_p1b(empty_runs):
+    """P1b-2 must be independently executable and differ only in width and output."""
+    from phase2.config import CapacityDiagnosticConfig
+    from utils.config import load_config
+
+    p1b = load_config("phase2/capacity_diagnostic_p1b", CapacityDiagnosticConfig)
+    p1b2 = load_config("phase2/capacity_diagnostic_p1b2", CapacityDiagnosticConfig)
+
+    assert [m.name for m in p1b2.models] == ["large"]
+    assert p1b2.models[0].base == "phase2/prototype_large"
+    assert p1b2.experiment.output_dir == "phase2/p1b2_capacity_diagnostic"
+    assert p1b2.experiment.output_dir != p1b.experiment.output_dir
+
+    for field in ("t", "k_values", "vocab_size", "batch_size", "eval_every", "eval_batch_size",
+                  "max_steps", "floor_threshold", "benchmark", "reference_pilot_output_dir"):
+        assert getattr(p1b2, field) == getattr(p1b, field), f"{field} must match P1b"
+    assert p1b2.optimizer == p1b.optimizer
+    assert p1b2.experiment.seed == p1b.experiment.seed
+
+
+def test_existing_p1b_config_still_lists_only_small_and_medium():
+    from phase2.config import CapacityDiagnosticConfig
+    from utils.config import load_config
+
+    p1b = load_config("phase2/capacity_diagnostic_p1b", CapacityDiagnosticConfig)
+    assert [m.name for m in p1b.models] == ["small", "medium"]
+
+
+def test_no_artifacts_gives_the_three_required_pending_states(empty_runs):
+    capacity = empty_runs.get_capacity_diagnostics()
+    assert capacity["p1b"]["state"] == "PENDING"
+    assert capacity["p1b2"]["state"] == "NOT STARTED"
+    assert capacity["combined"]["state"] == "WAITING FOR P1b + P1b-2"
+    assert capacity["combined"]["d5"] is None
+    assert capacity["combined"]["awaiting"] == ["P1b", "P1b-2"]
+
+
+def test_large_is_shown_as_a_candidate_not_a_selection(empty_runs):
+    capacity = empty_runs.get_capacity_diagnostics()
+    large = next(w for w in capacity["candidate_widths"] if w["name"] == "large")
+    assert large["status"] == "Candidate — P1b-2 pending"
+    assert large["diagnostic"] == "P1b-2"
+    assert "not a selection" in capacity["note"]
+
+    status = empty_runs.get_status()
+    assert status["decisions"]["model_width"]["state"] == "PENDING P1B"
+    assert status["decisions"]["model_width"]["value"] is None
+    assert status["model_families"]["selection_pending"] is True
+    assert not any(f["selected"] for f in status["model_families"]["families"])
+
+
+def test_p1b2_carries_its_provenance_note(empty_runs):
+    p1b2 = empty_runs.get_p1b2()
+    assert "introduced after the Large model family was added" in p1b2["provenance_note"]
+    assert "does not alter the original P1b data" in p1b2["provenance_note"]
+
+
+def test_capacity_pending_payload_contains_no_metrics(empty_runs):
+    blob = json.dumps(empty_runs.get_capacity_diagnostics())
+    for forbidden in ('"final_val_loss":', '"final_val_chance_normalised":', '"best_step":'):
+        assert forbidden not in blob, f"pending capacity payload leaked {forbidden}"
+
+
+def test_stage_plan_is_blocked_until_both_diagnostics_complete(empty_runs):
+    reasons = " ".join(empty_runs.get_plan()["blocked_reasons"])
+    assert "P1b is PENDING" in reasons
+    assert "P1b-2 is NOT STARTED" in reasons
+
+
+def test_combined_waits_while_only_p1b_exists(tmp_path):
+    _write_capacity(tmp_path, "phase2/p1b_capacity_diagnostic",
+                    {"small": (SMALL_P, True), "medium": (MEDIUM_P, True)}, "p1b-run")
+    capacity = Phase2Loader(tmp_path).get_capacity_diagnostics()
+    assert capacity["p1b"]["status"] == "available"
+    assert capacity["p1b2"]["state"] == "NOT STARTED"
+    assert capacity["combined"]["state"] == "WAITING FOR P1b + P1b-2"
+    assert capacity["combined"]["awaiting"] == ["P1b-2"]
+    assert capacity["combined"]["d5"] is None
+
+
+def test_combined_report_and_d5_once_both_exist(tmp_path):
+    _write_capacity(tmp_path, "phase2/p1b_capacity_diagnostic",
+                    {"small": (SMALL_P, False), "medium": (MEDIUM_P, True)}, "p1b-run")
+    _write_capacity(tmp_path, "phase2/p1b2_capacity_diagnostic", {"large": (LARGE_P, True)}, "p1b2-run")
+    combined = Phase2Loader(tmp_path).get_combined_capacity()
+
+    assert combined["status"] == "available" and combined["state"] == "COMBINED"
+    assert [f"{c['width']}/K={c['k']}" for c in combined["cells"]] == [
+        "small/K=1", "small/K=8", "medium/K=1", "medium/K=8", "large/K=1", "large/K=8"]
+    assert {c["source"] for c in combined["cells"]} == {"P1b", "P1b-2"}
+    assert combined["d5"]["status"] == "available"
+    assert combined["d5"]["evaluated_once_on_combined_report"] is True
+    # medium is the smallest learnable width here — not large
+    assert combined["d5"]["decision"]["width_decision"]["selected_width"] == "medium"
+
+
+def test_combined_never_prefers_large_over_a_learnable_smaller_width(tmp_path):
+    _write_capacity(tmp_path, "phase2/p1b_capacity_diagnostic",
+                    {"small": (SMALL_P, True), "medium": (MEDIUM_P, True)}, "p1b-run")
+    _write_capacity(tmp_path, "phase2/p1b2_capacity_diagnostic", {"large": (LARGE_P, True)}, "p1b2-run")
+    d5 = Phase2Loader(tmp_path).get_combined_capacity()["d5"]
+    assert d5["decision"]["width_decision"]["selected_width"] == "small"
+
+
+def test_combined_surfaces_a_merge_failure_as_an_error(tmp_path):
+    """Conflicting sources must not silently produce a decision."""
+    _write_capacity(tmp_path, "phase2/p1b_capacity_diagnostic", {"large": (LARGE_P, True)}, "p1b-run")
+    _write_capacity(tmp_path, "phase2/p1b2_capacity_diagnostic", {"large": (LARGE_P, True)}, "p1b2-run")
+    combined = Phase2Loader(tmp_path).get_combined_capacity()
+    assert combined["status"] == "error"
+    assert combined["d5"] is None
+    assert "duplicate width" in combined["message"]
+
+
+def test_p1b2_running_state_comes_from_artifacts_only(tmp_path):
+    _write_capacity(tmp_path, "phase2/p1b2_capacity_diagnostic", {"large": (LARGE_P, True)},
+                    "p1b2-run", status="running")
+    assert Phase2Loader(tmp_path).get_p1b2_status()["state"] == "RUNNING"
+
+
+def test_capacity_diagnostics_appear_in_the_status_payload(empty_runs):
+    assert empty_runs.get_status()["capacity_diagnostics"]["status"] == "available"

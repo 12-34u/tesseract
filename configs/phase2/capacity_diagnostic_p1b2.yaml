@@ -1,0 +1,50 @@
+# P1b-2 — capacity/learnability diagnostic for the Large research width.
+# Large × K {1, 8} at T=8, 20,000 fixed steps, validation only.
+#
+# PROVENANCE. P1b-2 was introduced after the Large model family was added to the
+# implementation. It does not alter the original P1b data, protocol, or decision
+# criteria. It supplies the same capacity diagnostic for the newly introduced
+# research-scale width so that D5 can evaluate all candidate widths under one
+# selection procedure.
+#
+# Every setting below is identical to configs/phase2/capacity_diagnostic_p1b.yaml
+# except the model list and the output directory:
+#   seed 0 · AdamW lr 1e-3 / wd 0.01 · batch 128 · eval every 250 steps
+#   eval batch 2048 · max_steps 20,000 · floor_threshold 0.02 · T = 8 · K = {1, 8}
+#   vocab_size 60 · benchmark phase2/benchmark · no early stopping · validation only
+# That config is NOT modified by this one, and the P1b run it describes is not
+# touched.
+#
+# Large is a CANDIDATE width, not a selected one. D5's rule is unchanged: it
+# recommends the smallest width satisfying the pre-registered learnability
+# criteria. Adding Large to the pool makes it eligible, never preferred.
+#
+# Not evidence for the depth hypothesis.
+
+experiment:
+  name: phase2_p1b2_capacity
+  output_dir: phase2/p1b2_capacity_diagnostic  # new directory; P1b artifacts are never written
+  seed: 0                                      # model seed (same as P1b)
+  device: auto                                 # CPU-only torch in this environment
+
+benchmark: phase2/benchmark
+vocab_size: 60
+
+models:
+  - {name: large, base: phase2/prototype_large}      # width only (7,230,780 params)
+
+t: 8
+k_values: [1, 8]
+
+optimizer:
+  name: adamw
+  learning_rate: 0.001
+  weight_decay: 0.01
+
+batch_size: 128
+eval_every: 250
+eval_batch_size: 2048
+max_steps: 20000          # fixed; no early stopping
+floor_threshold: 0.02
+
+reference_pilot_output_dir: phase2/pilot_p1   # 1500-step P1 references (read-only)
