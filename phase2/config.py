@@ -410,3 +410,54 @@ class Amendment02Config:
 
 def load_amendment_02(name_or_path: str = "phase2/amendment_02_draft") -> Amendment02Config:
     return load_config(name_or_path, Amendment02Config)
+
+
+@dataclass(frozen=True)
+class LevelAToleranceConfig:
+    description: str
+    max_abs_logit_difference: float
+    max_rel_logit_difference: float
+    max_abs_loss_difference_nats: float
+    max_rel_gradient_norm_difference: float
+    blocking: bool
+
+
+@dataclass(frozen=True)
+class LevelBToleranceConfig:
+    description: str
+    cell: CellSpec
+    steps: int
+    max_abs_chance_normalised_token_accuracy_difference: float
+    max_abs_token_accuracy_difference_points: float
+    max_abs_final_val_loss_difference_nats: float
+    blocking: bool
+
+
+@dataclass(frozen=True)
+class CrossDeviceToleranceConfig:
+    level_a_kernel_agreement: LevelAToleranceConfig
+    level_b_end_to_end: LevelBToleranceConfig
+
+
+@dataclass(frozen=True)
+class Amendment02aConfig:
+    """The compute-platform amendment: where Phase 2 runs and what that costs."""
+
+    id: str
+    date: str
+    status: str  # "draft" | "frozen"
+    frozen: bool
+    recorded_before_any_phase2_training_on_gpu: bool
+    summary: str
+    decisions: tuple[AmendmentDecision, ...]
+    cross_device_tolerance: CrossDeviceToleranceConfig
+    deviations: tuple[str, ...]
+    open_questions: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _require(self.status in ("draft", "frozen"), "status must be 'draft' or 'frozen'")
+        _require(self.frozen == (self.status == "frozen"), "frozen flag must match status")
+
+
+def load_amendment_02a(name_or_path: str = "phase2/amendment_02a_draft") -> Amendment02aConfig:
+    return load_config(name_or_path, Amendment02aConfig)

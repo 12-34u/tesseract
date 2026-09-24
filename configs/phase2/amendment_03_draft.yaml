@@ -1,0 +1,99 @@
+# Phase 2 Amendment 03 (intermediate supervision) — DRAFT, NOT ACTIVE.
+# Drafted 2026-09-24 alongside the P1c probes, so that a response exists if the
+# probes show the T=8 barrier is an optimisation barrier. Nothing in this file
+# is enabled: `active: false` and no runner reads it. Activating it requires
+# explicit approval and a recorded decision, after the probe report.
+
+id: amendment_03
+date: "2026-09-24"
+status: draft
+frozen: false
+active: false
+
+motivation: >-
+  P1b showed T=8 is not learned, and that capacity, budget and stability do not
+  explain it. The P1c signal analysis showed why: the task's signal sits at
+  near-full interaction order (all-but-one-cell subsets predict 26.7 %,
+  all-but-two 13.4 %, all-but-three 7.0 %), so a cold-started model has almost
+  no partial-credit gradient to follow. Intermediate supervision is the standard
+  remedy for a flat landscape with a reachable solution. It is drafted here
+  precisely because it is dangerous: the wrong form of it would guarantee the
+  result the experiment is supposed to test.
+
+options:
+  - id: primary
+    name: Curriculum over T
+    text: >-
+      Anneal the training distribution from T=1 up to the target T, on a schedule
+      that is IDENTICAL for every K, every family and every baseline. The model
+      is trained on easier depths first and the target depth last; evaluation is
+      always at the target T on the untouched validation and test splits. This
+      supervises only the task's own input/output relation at smaller depths. It
+      says nothing about how many block executions a depth should take, so it
+      does not encode the hypothesis into the training signal.
+    identical_across_k: true
+    touches_recursion: false
+  - id: fallback
+    name: Output-side auxiliary heads
+    text: >-
+      Attach auxiliary linear heads that predict F^1 ... F^T from the FINAL
+      state, with a fixed auxiliary loss weight identical across K, families and
+      baselines. The heads read the final state only; they are removed at
+      evaluation, which is unchanged. Because every head reads the same final
+      state regardless of K, this adds no per-depth structure that a deeper model
+      could exploit by construction.
+    identical_across_k: true
+    touches_recursion: false
+
+forbidden:
+  - id: per_step_supervision
+    name: Supervising recursion step k to match F^k
+    text: >-
+      FORBIDDEN. Adding a loss that forces the state after the k-th block
+      execution to equal F^k assumes that one block call corresponds to one CA
+      step. That assumption is not established; it is close to the hypothesis
+      under test. Worse, it rewards K >= T by construction, because only a model
+      with at least T executions can satisfy all T constraints, and penalises
+      K < T no matter how well it computes the final answer. A K-vs-performance
+      curve produced under this loss would measure the loss, not the
+      architecture, and the conclusion "more recursion steps help" would be
+      circular. It must not be implemented, not even behind a disabled flag.
+
+invariants:
+  benchmark_unchanged: true      # group, n, F, T grid, tasks: untouched
+  data_splits_unchanged: true    # the frozen checksummed splits are not regenerated
+  evaluation_unchanged: true     # same metrics, same validation/test protocol, same decision rule
+  identical_across_all_arms: true
+  reportable_both_ways: >-
+    Any result obtained under this amendment must be reported alongside the
+    corresponding result without it. The amendment may not silently replace the
+    unamended protocol, and a depth effect that appears only under intermediate
+    supervision must be reported as conditional on it.
+
+open_questions:
+  # Both belong in Amendment 02 and must be settled BEFORE it is frozen.
+  - id: Q1
+    title: Three seeds or five?
+    text: >-
+      The pre-registered statistics use 3 seeds, so paired t-intervals carry
+      df=2 and a critical value of 4.303. That is wide enough that only a large,
+      consistent effect can clear zero. Moving to 5 seeds (df=4, t=2.776) would
+      cut the interval width by roughly 40 % for the same per-seed spread, at
+      the cost of 67 % more compute across the whole matrix. The decision must be
+      made before Amendment 02 is frozen, because changing the seed count after
+      seeing any grid result would be a post-hoc change to the inference.
+  - id: Q2
+    title: Residual-stream growth with K is a confound for the K effect
+    text: >-
+      Phase 1 found the architecture has no final LayerNorm, so the residual
+      stream grows with the number of block executions and initial loss rises
+      with K (3.24 at K=1 to 28.31 at K=8). A K=8 model therefore starts further
+      from chance and in a worse-conditioned region than a K=1 model, which is a
+      difference in optimisation conditions rather than in computational depth -
+      exactly the axis the experiment attributes its effect to. Amendment 02
+      must choose one of: (a) keep the architecture as it is and report the
+      confound explicitly wherever a K effect is claimed; (b) add a final
+      LayerNorm to every family and every K, changing the architecture uniformly
+      and re-baselining; or (c) run a normalisation ablation as a control arm.
+      Option (b) alters the Phase 1 architecture and would need its own recorded
+      decision; option (a) is the current, and weakest, position.

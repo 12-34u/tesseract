@@ -1,0 +1,108 @@
+# Phase 2 Amendment 02a (compute platform) — DRAFT / PRE-FREEZE.
+# Written on 2026-09-24, BEFORE any Phase 2 experimental result exists: at this
+# date the gates, P1, P1b and the signal analysis are complete, and no grid cell,
+# probe or Stage #1 run has been executed on any GPU.
+#
+# Amendment 01 is not edited by this file. Amendment 02 is not frozen by this
+# file. 02a is separated from 02 because it concerns the platform runs execute
+# on, not the scientific design, and it must be recordable before the width and
+# budget decisions that Amendment 02 is still waiting on.
+
+id: amendment_02a
+date: "2026-09-24"
+status: draft
+frozen: false
+recorded_before_any_phase2_training_on_gpu: true
+
+summary: >-
+  Phase 1 ran entirely on CPU. Phase 2's step budgets make CPU execution
+  impractical, so Phase 2 training runs on a CUDA device. Moving platform
+  changes floating-point numerics, so this amendment states what reproducibility
+  means after the move, what is enforced to make it true, and what is verified
+  rather than assumed.
+
+decisions:
+  - id: P1
+    title: Phase 2 training runs on GPU
+    text: >-
+      Phase 2 probes, stages, controls and baselines execute on a CUDA device.
+      The Phase 1 CPU environment is left untouched and remains the environment
+      in which Phase 1 results reproduce. Every Phase 2 run records its device,
+      GPU name, compute capability, CUDA runtime, cuDNN version, NVIDIA driver
+      version, and torch version in its run metadata (phase2/compute.py,
+      attached through run_cell provenance; the frozen Phase 1 recorder is not
+      edited).
+  - id: P2
+    title: Determinism is enforced, not hoped for
+    text: >-
+      Every Phase 2 process calls phase2.compute.configure_determinism, which
+      sets CUBLAS_WORKSPACE_CONFIG=":4096:8" before CUDA initialisation, enables
+      torch.use_deterministic_algorithms(True), disables cuDNN autotuning, and
+      disables TF32 on both the matmul and cuDNN paths with
+      float32_matmul_precision="highest". TF32 is singled out because on Ampere
+      it truncates float32 matmul inputs to 10 mantissa bits by default, which
+      would degrade GPU precision relative to CPU for a reason unrelated to the
+      experiment. All seeds are set through utils.seed.set_seed as in Phase 1.
+  - id: P3
+    title: Reproducibility is defined as same-hardware determinism
+    text: >-
+      A Phase 2 result is reproducible if re-running it with the same seed, the
+      same configuration and the same device and software stack reproduces it
+      exactly. Bitwise agreement across devices is NOT claimed and is not
+      achievable: CPU and GPU use different kernels, different reduction orders
+      and different degrees of parallelism. Phase 1's bit-exact CPU
+      reproducibility claim is unchanged and remains a CPU claim.
+  - id: P4
+    title: Cross-device agreement is verified within a tolerance stated in advance
+    text: >-
+      Agreement is checked at two levels, because they fail for different
+      reasons. Level A (kernel agreement) compares one forward and one backward
+      pass from identical initial weights on an identical batch; this isolates
+      kernel differences from training chaos and must be tight. Level B
+      (end-to-end) trains one cell to completion on each device and compares
+      final metrics; this is inherently loose because optimisation is chaotic
+      and a 1e-7 kernel difference is amplified over thousands of steps. The
+      thresholds below were fixed before the comparison was run and are not to
+      be revised after seeing its output. A Level A failure is a hard failure
+      and blocks GPU execution. A Level B failure with Level A passing is
+      recorded as trajectory divergence: it does not block Phase 2, because
+      every comparison inside the experiment is made between cells run on the
+      same device, but it does mean individual CPU and GPU runs of the same cell
+      may not be compared to each other, and it must be reported wherever
+      Phase 1 and Phase 2 numbers appear together.
+  - id: P5
+    title: The whole experiment runs on one platform
+    text: >-
+      A single device and software stack is used for all cells of a given
+      comparison. Mixing devices within the K x T matrix is forbidden, since it
+      would put a platform difference inside the effect being measured. If the
+      platform changes mid-experiment, affected cells are re-run, not merged.
+
+cross_device_tolerance:
+  level_a_kernel_agreement:
+    description: "one forward + backward from identical weights on an identical batch, float32"
+    max_abs_logit_difference: 1.0e-3
+    max_rel_logit_difference: 1.0e-4
+    max_abs_loss_difference_nats: 1.0e-4
+    max_rel_gradient_norm_difference: 1.0e-4
+    blocking: true
+  level_b_end_to_end:
+    description: "T=1, K=1, medium width, fixed steps, same seed, trained independently on each device"
+    cell: {family: tesseract, group: A5, task: main, t: 1, depth: 1, seed: 0}
+    steps: 2000   # a numerics check, not a science run; the probe budget does not apply here
+    max_abs_chance_normalised_token_accuracy_difference: 0.02
+    max_abs_token_accuracy_difference_points: 2.0
+    max_abs_final_val_loss_difference_nats: 0.05
+    blocking: false
+
+deviations:
+  - "Phase 2 executes on GPU while Phase 1 results remain CPU results (P1)"
+  - "reproducibility redefined as same-hardware determinism, not cross-device bitwise equality (P3)"
+  - "TF32 disabled, so GPU throughput is lower than the hardware's peak (P2)"
+  - >-
+    the CUDA environment is a separate virtualenv outside the repository with
+    torch 2.13.0+cu129, matching the CPU environment's torch 2.13.0+cpu version
+    exactly; only the build differs
+
+open_questions:
+  - "Amendment 02 must decide whether the deterministic-kernel slowdown changes the affordable step budget."

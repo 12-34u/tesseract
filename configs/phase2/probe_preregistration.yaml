@@ -1,0 +1,92 @@
+# PRE-REGISTERED probe decision rule — Tesseract Phase 2, P1c probes A and B.
+# Committed on 2026-09-24 BEFORE either probe was executed. The thresholds in
+# `rule` are the ones supplied in the instruction, transcribed verbatim and not
+# to be revised after seeing any probe output. `operational` fixes the details
+# the instruction left open; it was written and committed at the same time, also
+# before any probe ran.
+
+id: probe_preregistration_p1c
+date: "2026-09-24"
+committed_before_execution: true
+applies_to: [probe_a, probe_b]
+
+chance:
+  vocabulary: 60
+  token_accuracy_percent: 1.6666666666666667    # 100 / 60
+  loss_nats: 4.0943445622221    # ln 60
+
+rule:
+  learnable:
+    text: >-
+      accuracy >= chance (1.67%) + 5 points, OR loss <= ln 60 - 0.1 nats,
+      in at least 2 of 3 seeds
+    accuracy_percent_at_least: 6.666666666666667
+    loss_nats_at_most: 3.9943445622221
+    seeds_required: 2
+  partial:
+    text: "above chance on any seed but below the LEARNABLE bar"
+  not_learnable:
+    text: "indistinguishable from chance on all seeds"
+
+operational:
+  held_out_split: val        # the frozen 2048-example validation split; test is never read by a probe
+  test_split_used: false
+  primary_checkpoint: best   # best-validation checkpoint within the budget
+  also_reported_checkpoint: final
+  accuracy_metric: token_accuracy_percent
+  loss_metric: mean per-token cross-entropy in nats on the validation split
+  fixed_step_budget: 20000   # same budget as P1b, so probes are directly comparable to it
+  seeds: [0, 1, 2]
+  above_chance_definition: >-
+    Token accuracy exceeding chance by more than z * SE, where SE is the standard
+    error of mean token accuracy over the validation split using the EXAMPLE as
+    the independent unit (tokens inside one ring are correlated), and
+    z = Phi^-1(1 - 0.05 / M) with M the number of validation evaluations in the
+    run. The correction is required because the primary checkpoint is chosen as
+    the maximum over those M evaluations, so an uncorrected bar would be crossed
+    by selection noise alone. A run also counts as above chance if its FINAL
+    checkpoint validation loss is at most ln 60 - 0.01 nats; loss is not selected
+    on, so it needs no correction.
+  classification_is_mechanical: true
+
+probes:
+  probe_a:
+    t: 4
+    width: medium            # phase2/prototype_medium, 837,436 parameters
+    k_values: [1, 8]
+    warm_start: false
+  probe_b:
+    t: 8
+    width: medium
+    k_values: [1, 8]
+    warm_start: true
+    warm_start_source: >-
+      Stage 1 trains the SAME width and the SAME K on T=1 with the same optimizer,
+      for at most 20,000 steps, stopping early when validation exact match reaches
+      99 %. The best-validation checkpoint of stage 1 is the warm start for stage 2.
+      Warm-starting each K from a T=1 solution trained at that same K means the only
+      thing that changes between the two stages is T. Stage 2 then trains on T=8 for
+      the full 20,000-step budget, and only stage 2 numbers are classified.
+    diagnostic_only: true
+    note: >-
+      Warm-starting is a diagnostic for whether the T=8 barrier is optimisation or
+      representation. It must not become the training protocol of the Phase 2 grid.
+
+auxiliary_measurements:
+  # Recorded and reported, but NOT part of the classification above.
+  - id: warm_start_reference
+    applies_to: probe_b
+    text: >-
+      Before any T=8 training step, evaluate the warm-start checkpoint (the
+      trained T=1 solution) on the T=8 validation split and record the result.
+      Probe B's classification is applied mechanically to its post-training
+      numbers regardless of this value, but without it a warm-started run that
+      merely inherited T=1 structure could not be distinguished from one that
+      learned anything about T=8.
+  - id: initial_loss_by_k
+    applies_to: [probe_a, probe_b]
+    text: >-
+      Record step-0 validation loss per K. Phase 1 found that without a final
+      LayerNorm the residual stream grows with K, so initial loss rises with K.
+      A K=8 run starting further from ln 60 must not be read as evidence about
+      depth.

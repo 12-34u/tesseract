@@ -272,13 +272,20 @@ def _all_finite(state: Optional[Dict]) -> Optional[bool]:
 
 def run_cell(config: CellRunConfig, config_path: Path, device: torch.device, run_dir: Path,
              stop_condition=None, evaluate_test: bool = True, compute_coverage: bool = True,
-             provenance: Optional[Dict] = None, log: Callable[[str], None] = print) -> Dict:
+             provenance: Optional[Dict] = None, warm_start: Optional[Dict] = None,
+             log: Callable[[str], None] = print) -> Dict:
     """Train one cell with the fixed-step protocol and record everything.
 
     Test policy: the test split is never touched during training. When
     ``evaluate_test`` is set, it is evaluated once after training on the
     best-validation checkpoint (``test``, primary) and once on the final
     checkpoint (``test_final``, sensitivity).
+
+    ``warm_start`` replaces the seeded random initialisation with a recorded
+    checkpoint: ``{"state_dict": ..., "source": str, "sha256": str}``. It is a
+    diagnostic facility (P1c Probe B). A warm-started run records its source in
+    the result so it can never be mistaken for a cold-started one; the Phase 2
+    grid does not use it.
     """
     cell, benchmark, training = config.cell, config.benchmark, config.training
     group = get_group(cell.group)
@@ -296,6 +303,11 @@ def run_cell(config: CellRunConfig, config_path: Path, device: torch.device, run
         set_seed(cell.seed)
         built = build_model(cell.family, cell.depth, config.model, benchmark.n)
         model = built.model.to(device)
+        warm_start_record = None
+        if warm_start is not None:
+            model.load_state_dict({k: v.to(device) for k, v in warm_start["state_dict"].items()})
+            warm_start_record = {k: v for k, v in warm_start.items() if k != "state_dict"}
+            log(f"[{cell.cell_id}] WARM START from {warm_start_record.get('source')}")
         structure = measure_block_calls(model, benchmark.n, device)
 
         def make_stream() -> TrainingStream:
@@ -393,6 +405,7 @@ def run_cell(config: CellRunConfig, config_path: Path, device: torch.device, run
             "window_coverage_reference": coverage_reference,
             "split_sha256": {"val": val.sha256, **({"test": test.sha256} if evaluate_test else {})},
             "provenance": provenance,
+            "warm_start": warm_start_record,
         }
 
         fieldnames = sorted({key for row in outcome.history for key in row}, key=lambda k: (k != "step", k))
