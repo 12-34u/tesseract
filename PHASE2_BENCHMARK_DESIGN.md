@@ -493,3 +493,101 @@ This review uses best-checkpoint **validation** chance-normalised accuracy.
 
 Stage summaries contain validation metrics only. Test metrics are analysed
 only once every planned cell is complete.
+
+## 11. Amendment 02a — compute platform — **DRAFT, NOT FROZEN**
+
+Recorded 2026-09-24, before any Phase 2 result produced on a GPU exists.
+Amendment 01 is not edited; Amendment 02 is not frozen by this.
+Config: [configs/phase2/amendment_02a_draft.yaml](configs/phase2/amendment_02a_draft.yaml).
+
+Phase 1 ran entirely on CPU. Phase 2's step budgets make that impractical, so
+Phase 2 training moves to a CUDA device. The decisions:
+
+* **P1 — Phase 2 runs on GPU.** The Phase 1 CPU environment is untouched and
+  remains the environment in which Phase 1 results reproduce. The CUDA
+  environment is a separate virtualenv *outside* the repository.
+* **P2 — determinism is enforced, not hoped for.**
+  `CUBLAS_WORKSPACE_CONFIG=:4096:8` before CUDA initialisation,
+  `torch.use_deterministic_algorithms(True)`, cuDNN autotuning off, and **TF32
+  off** on both the matmul and cuDNN paths. TF32 is singled out because on
+  Ampere it truncates float32 matmul inputs to 10 mantissa bits by default,
+  which would degrade GPU precision relative to CPU for a reason that has
+  nothing to do with the experiment.
+* **P3 — reproducibility means same-hardware determinism.** Bitwise agreement
+  across devices is not claimed and is not achievable. Phase 1's bit-exact
+  claim is unchanged and remains a CPU claim.
+* **P4 — cross-device agreement is verified against a tolerance fixed in
+  advance**, at two levels, because they fail for different reasons. Level A
+  (kernel agreement, blocking) compares one forward and one backward from
+  identical weights, isolating kernel differences from training chaos. Level B
+  (end-to-end, advisory) trains the same cell on each device and compares final
+  metrics; it is loose because optimisation amplifies tiny differences.
+* **P5 — one platform per experiment.** Mixing devices inside the K×T matrix is
+  forbidden: it would put a platform difference inside the effect being
+  measured.
+
+### Measured agreement (T=1, K=1, medium width, 2,000 steps, seed 0)
+
+| Level | Quantity | Tolerance | Measured |
+|---|---|---|---|
+| A | max abs logit difference | 1e-3 | **2.38e-06** |
+| A | max rel logit difference | 1e-4 | **6.53e-07** |
+| A | abs loss difference (nats) | 1e-4 | **4.77e-07** |
+| A | rel gradient-norm difference | 1e-4 | **1.34e-10** |
+| B | chance-normalised token accuracy | 0.02 | **0.0** |
+| B | token accuracy (points) | 2.0 | **0.0** |
+| B | final validation loss (nats) | 0.05 | **2.19e-08** |
+
+Both levels pass, with margins of three to seven orders of magnitude. A third
+leg separated the *build* from the *device*: the Phase 1 `torch 2.13.0+cpu`
+wheel and the `torch 2.13.0+cu129` wheel, both run on CPU, produced a
+**bit-identical** final loss. The build contributes nothing; only the device
+changes the numerics, and only at the 1e-8 level. The check is re-applied from
+the recorded measurements by `phase2.integrity.check_cpu_gpu_crosscheck`, which
+re-reads the tolerance from this amendment rather than trusting the verdict
+stored in the report.
+
+## 12. Amendment 03 — intermediate supervision — **DRAFT, NOT ACTIVE**
+
+Drafted 2026-09-24 alongside the P1c probes so that a response exists if they
+show the T=8 barrier is an optimisation barrier. Nothing is enabled: no runner
+reads it, and activating it requires explicit approval.
+Config: [configs/phase2/amendment_03_draft.yaml](configs/phase2/amendment_03_draft.yaml).
+
+* **Primary option — curriculum over T.** Anneal training from T=1 up to the
+  target T on a schedule identical for every K, family and baseline. It
+  supervises only the task's own input/output relation at smaller depths, and
+  says nothing about how many block executions a depth ought to take.
+* **Fallback — output-side auxiliary heads.** Heads predicting F¹…F^T from the
+  **final** state, with a fixed weight identical across K. Because every head
+  reads the same final state regardless of K, no per-depth structure is added
+  that a deeper model could exploit by construction.
+* **Forbidden — supervising recursion step k to match F^k.** This assumes one
+  block call equals one CA step, which is not established and is close to the
+  hypothesis under test. It rewards K ≥ T by construction and penalises K < T
+  however well the model computes the final answer, so a K-vs-performance curve
+  measured under it would describe the loss, not the architecture. It must not
+  be implemented, not even behind a disabled flag.
+
+Benchmark, data splits, metrics and the decision rule are untouched, and any
+result obtained under the amendment must be reported alongside the
+corresponding result without it.
+
+### Open questions that belong in Amendment 02 before it is frozen
+
+1. **Three seeds or five?** Paired intervals at 3 seeds carry df=2 and a
+   critical value of 4.303, wide enough that only a large, consistent effect
+   clears zero. Five seeds (df=4, t=2.776) would narrow intervals by roughly
+   40 % for 67 % more compute. This must be settled before freezing, because
+   changing the seed count after seeing a grid result is a post-hoc change to
+   the inference.
+2. **Residual-stream growth with K.** With no final LayerNorm the residual
+   stream grows with the number of block executions, and Phase 1 measured
+   initial loss rising from 3.24 at K=1 to 28.31 at K=8. A K=8 model therefore
+   starts further from chance and in a worse-conditioned region than a K=1
+   model — a difference in optimisation conditions sitting on exactly the axis
+   the experiment attributes its effect to. Amendment 02 must choose: (a) keep
+   the architecture and report the confound wherever a K effect is claimed;
+   (b) add a final LayerNorm to every family and every K and re-baseline; or
+   (c) run a normalisation ablation as a control arm. Option (a) is the current
+   and weakest position.
