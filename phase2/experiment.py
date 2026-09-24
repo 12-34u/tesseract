@@ -38,7 +38,7 @@ from phase2.config import (
     resolve_model_variant,
 )
 from phase2.inference import analyze, stage_review
-from phase2.integrity import check_benchmark_integrity
+from phase2.integrity import check_benchmark_integrity, check_cpu_gpu_crosscheck, check_phase1_frozen
 from phase2.plots import load_curves, write_report
 from phase2.runner import DEFAULT_GATES_DIR, run_cell, splits_dir
 from utils.config import resolve_config_path
@@ -46,6 +46,7 @@ from utils.paths import resolve_run_dir
 from utils.run_artifacts import METADATA_FILENAME, RunRecorder, write_json
 
 P1B_RUN_DIR = "phase2/p1b_capacity_diagnostic"
+CROSSCHECK_RUN_DIR = "phase2/crosscheck_cpu_gpu"
 STAGE_ARTIFACTS = ["stage_summary.json", "summary.txt"]
 ANALYSIS_ARTIFACTS = ["analysis.json", "report.md", "fig1_delta_vs_t.png", "fig2_score_vs_k.png",
                       "fig3_score_vs_flops.png", "fig4_learning_curves.png"]
@@ -112,6 +113,20 @@ def check_preconditions(config: Phase2ExperimentConfig, amendment02: Amendment02
     if not integrity.get("passed"):
         failed = [name for name, ok in integrity.get("checks", {}).items() if not ok]
         raise RuntimeError(f"Benchmark integrity check failed: {failed}")
+
+    frozen = check_phase1_frozen()
+    if not frozen["passed"]:
+        raise RuntimeError(f"Phase 1 files have changed since the freeze commit "
+                           f"{frozen['freeze_commit'][:7]}: modified={frozen['modified']} "
+                           f"missing={frozen['missing']}")
+
+    # Amendment 02a: GPU execution requires a recorded, still-valid cross-check.
+    if torch.cuda.is_available():
+        crosscheck = check_cpu_gpu_crosscheck(resolve_run_dir(CROSSCHECK_RUN_DIR))
+        if not crosscheck["passed"]:
+            failed = [name for name, ok in crosscheck["checks"].items() if not ok]
+            raise RuntimeError(f"CPU/GPU cross-check (Amendment 02a) failed or is missing: {failed}. "
+                               f"Run scripts/phase2_crosscheck.py before training on GPU.")
     meta_path = Path(p1b_run_dir) / METADATA_FILENAME
     p1b_meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else {}
     if p1b_meta.get("status") != "completed":
