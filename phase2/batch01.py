@@ -234,3 +234,34 @@ def sha256_of(*arrays: np.ndarray) -> str:
     for a in arrays:
         h.update(np.ascontiguousarray(a).tobytes())
     return h.hexdigest()
+
+
+@torch.no_grad()
+def hidden_state_norms(model: nn.Module, inputs: np.ndarray, device: torch.device) -> List[Dict]:
+    """RMS norm of z_L and z_H after each recursion step.
+
+    This is the quantity the residual confound is actually about. Step-0 loss is
+    only a symptom of it, and an output-side LayerNorm makes that symptom
+    K-invariant by construction — so the growth of the stream itself has to be
+    measured directly to say whether the confound is present.
+
+    Reported as root-mean-square over the feature dimension, averaged over
+    tokens and examples, so values are comparable across widths.
+    """
+    model.eval()
+    x = torch.from_numpy(np.ascontiguousarray(inputs)).to(device)
+    _, history = model(x, return_states=True)
+    rows = []
+    for step, state in enumerate(history, start=1):
+        row = {"step": step}
+        for key in ("z_L", "z_H"):
+            value = state[key].float()
+            row[f"{key}_rms"] = float(value.pow(2).mean(dim=-1).sqrt().mean().item())
+            row[f"{key}_max_abs"] = float(value.abs().max().item())
+        rows.append(row)
+    return rows
+
+
+def layer_norm_parameter_cost(d_model: int) -> int:
+    """Parameters a final LayerNorm adds: one weight and one bias per feature."""
+    return 2 * d_model

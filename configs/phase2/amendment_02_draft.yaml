@@ -71,4 +71,60 @@ deviations:
   - "budget from P1b; controls and baselines at T in {4, 8}; L=1 baselines reuse Tesseract K=1 (D4)"
   - "test on best and final checkpoints after training only (D4)"
 
+residual_stream_confound:
+  # Open question Q2, with the measurements that answer part of it.
+  # Measured on an untrained medium-width model, 256 validation inputs,
+  # runs/phase2/batch01/arm2a_residual_norms/residual_norms_report.json
+  status: unresolved
+  measurement:
+    step0_validation_loss_nats:      # symptom
+      fix_off: {k1: 4.4262, k2: 5.5024, k4: 10.1537, k8: 33.9691}
+      fix_on:  {k1: 4.2569, k2: 4.2569, k4: 4.2568, k8: 4.2568}
+    hidden_state_z_L_rms_per_step:   # the confound itself
+      k8_fix_off: [1.43, 3.00, 4.86, 7.16, 10.09, 13.89, 18.83, 25.30]
+      k8_fix_on:  [1.43, 3.00, 4.86, 7.16, 10.09, 13.89, 18.83, 25.30]
+      growth_ratio_k8: 17.7
+  finding: >-
+    The output-side LayerNorm does NOT remove the residual-stream confound. It
+    normalises the read-out only and never touches the recursion, so the hidden
+    state grows identically with the fix on and off (17.7x from the first
+    recursion step to the eighth at K=8). Equal step-0 loss under the fix is a
+    property of the construction, not evidence that the confound is gone: a
+    normalisation immediately before the vocabulary projection makes step-0 loss
+    K-invariant whatever the hidden state is doing. Batch 01 Arm 2b therefore
+    tests whether the read-out normalisation changes learnability; it does not
+    and cannot establish that the confound has been removed.
+  applies_to_all_families: true      # verified: tesseract, unrolled, param_matched, width_scaled
+  per_family_added_parameters:
+    tesseract: 512       # 2 x d_model 256
+    unrolled: 512
+    param_matched: 176   # 2 x d_model 88
+    width_scaled: 512
+  parameter_matching_with_fix:
+    tesseract_k8: 837948
+    param_matched_k8: 837148
+    relative_difference: -0.00095
+    within_one_percent: true
+    note: >-
+      match_parameters solves for d_model without accounting for the LayerNorm,
+      so the residual -0.10 % drift is inherited rather than corrected. It is
+      inside the 1 % tolerance the family tests enforce, but if the fix is
+      activated the matching solver should include the LayerNorm cost.
+  options_if_the_confound_must_actually_be_removed:
+    - id: per_step_normalisation
+      text: >-
+        Normalise z_L inside the recursion, at every execution. This is where
+        the growth occurs, so it is the only option that addresses it directly.
+        It changes the recursion and therefore the function the block computes,
+        and would need its own recorded decision and a re-baseline.
+    - id: scaled_residual_update
+      text: >-
+        Scale the residual update by 1/K or 1/sqrt(K). Removes the growth but
+        introduces a new K-dependent term into the function, which is the axis
+        under test.
+    - id: report_as_confound
+      text: >-
+        Keep the architecture and report the growth wherever a K effect is
+        claimed. The current and weakest position.
+
 pending_p1b: "model width (model_base) and fixed step budget (max_steps), plus the baseline sizes and runtimes that follow from them"

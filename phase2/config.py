@@ -401,6 +401,10 @@ class Amendment02Config:
     decision_rule: DecisionRuleConfig
     stage1_review: Stage1ReviewConfig
     deviations: tuple[str, ...]
+    # Measurements and options for open question Q2, recorded as a free-form
+    # mapping: it is evidence attached to the amendment, not a setting any
+    # runner reads, so it is deliberately not given a rigid schema.
+    residual_stream_confound: dict
     pending_p1b: str
 
     def __post_init__(self) -> None:
