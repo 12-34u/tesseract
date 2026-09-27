@@ -5,10 +5,11 @@
 # explicit approval and a recorded decision, after the probe report.
 
 id: amendment_03
-date: "2026-09-24"
-status: draft
+date: "2026-09-27"
+status: final               # design finalised; activation still requires approval
 frozen: false
 active: false
+mechanism: curriculum_over_t   # the primary option below is the chosen mechanism
 
 motivation: >-
   P1b showed T=8 is not learned, and that capacity, budget and stability do not
@@ -22,6 +23,7 @@ motivation: >-
 
 options:
   - id: primary
+    chosen: true
     name: Curriculum over T
     text: >-
       Anneal the training distribution from T=1 up to the target T, on a schedule
@@ -34,6 +36,7 @@ options:
     identical_across_k: true
     touches_recursion: false
   - id: fallback
+    chosen: false
     name: Output-side auxiliary heads
     text: >-
       Attach auxiliary linear heads that predict F^1 ... F^T from the FINAL
@@ -44,6 +47,48 @@ options:
       could exploit by construction.
     identical_across_k: true
     touches_recursion: false
+
+schedule:
+  # Identical for every K, every family and every baseline. Fixed here so the
+  # schedule cannot be tuned per arm after seeing a result.
+  stages: [1, 2, 4]           # T values trained before the target depth
+  target_t: 4                 # the depth the probe is classified on
+  steps_per_stage: 5000
+  target_stage_steps: 20000   # the target depth gets the same budget the probes used
+  total_steps: 35000          # 3 x 5000 + 20000
+  optimizer_reset_between_stages: false
+  evaluation: "target T only, on the frozen validation split; the test split is never read"
+  identical_across_k: true
+  identical_across_families: true
+
+success_rule:
+  # The SAME bars as the P1c probes, deliberately unchanged, so a curriculum
+  # result is directly comparable with the cold-start result it is meant to
+  # improve on. Committed before the curriculum probe is executed.
+  preregistration: configs/phase2/probe_preregistration.yaml
+  chance_token_accuracy_percent: 1.6666666666666667
+  chance_loss_nats: 4.0943445622221
+  learnable:
+    accuracy_percent_at_least: 6.666666666666667
+    loss_nats_at_most: 3.9943445622221
+    seeds_required: 2
+  partial: "above chance on any seed but below the LEARNABLE bar"
+  not_learnable: "indistinguishable from chance on all seeds"
+  above_chance_definition: >-
+    Identical to the probe pre-registration: chance + z*SE, SE over the
+    validation split with the example as the independent unit, and
+    z = Phi^-1(1 - 0.05/M) with M the number of validation evaluations.
+  comparison: >-
+    The curriculum probe is judged against the cold-start Probe A result at the
+    same T, K, width and seeds. Amendment 03 succeeds only if the curriculum
+    moves a cell out of NOT LEARNABLE that was NOT LEARNABLE without it. A
+    single seed crossing the above-chance bar does not count as success: the
+    P1c report showed one such crossing is the modal outcome under the null
+    when several cells are tested.
+  reporting: >-
+    Results under the curriculum are always reported beside the corresponding
+    result without it. A depth effect that appears only under the curriculum is
+    reported as conditional on the curriculum.
 
 forbidden:
   - id: per_step_supervision
