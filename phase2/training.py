@@ -98,8 +98,15 @@ def train_fixed_steps(
     device: torch.device,
     vocab_size: int,
     stop_condition: Optional[Callable[[SplitMetrics], bool]] = None,
+    lr_schedule: Optional[Callable[[int], float]] = None,
     log: Callable[[str], None] = print,
 ) -> TrainOutcome:
+    """``lr_schedule`` maps a 0-based step to a learning rate.
+
+    Optional and unused by the grid, which trains at a constant rate. It exists
+    for the Batch 01 optimiser check, and when it is None the loop behaves
+    exactly as before.
+    """
     optimizer = build_optimizer(model, training.optimizer)
     history: List[Dict] = []
     best_state, best_score, best_step, best_val, best_val_loss = None, -math.inf, None, None, None
@@ -112,6 +119,10 @@ def train_fixed_steps(
     step = 0
 
     for step in range(1, training.max_steps + 1):
+        if lr_schedule is not None:
+            lr = lr_schedule(step - 1)
+            for group in optimizer.param_groups:
+                group["lr"] = lr
         inputs, targets = stream.next_batch()
         start = time.perf_counter()
         metrics = train_step(model, torch.from_numpy(inputs).to(device), torch.from_numpy(targets).to(device), optimizer)
