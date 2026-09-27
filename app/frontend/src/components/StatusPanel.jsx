@@ -21,7 +21,7 @@ export function StatusPanel({ experiments }) {
           {experiments.map((exp) => {
             const [badgeClass, label] = badgeFor(exp);
             return (
-              <div key={exp.id} style={{ padding: '0.75rem', backgroundColor: '#090d16', borderRadius: '0.375rem', border: '1px solid #1e293b' }}>
+              <div key={exp.id} style={{ padding: '0.75rem 0.85rem', backgroundColor: 'var(--bg-inset)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
                 <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{exp.name}</div>
                 <div style={{ marginTop: '0.35rem' }}>
                   <span className={`badge ${badgeClass}`}>{label}</span>

@@ -113,7 +113,9 @@ export function Dashboard() {
         </div>
       )}
 
-      {!loading && isPhase2 && <Phase2Section status={phase2} error={errors.phase2} />}
+      {!loading && isPhase2 && (
+        <Phase2Section status={phase2} error={errors.phase2} presentationMode={presentationMode} />
+      )}
 
       {!loading && !isPhase2 && (
         <>

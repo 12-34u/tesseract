@@ -13,12 +13,12 @@ export function Header({
     <header className="header">
       <div className="header-title">
         <h1>
-          <Activity size={24} style={{ color: 'var(--accent-cyan)' }} />
+          <Activity size={16} style={{ color: 'var(--accent-cyan)' }} />
           TESSERACT
         </h1>
-        <p>Transformer Engineered for Sequential State Evaluation and Recursive Action — Evaluation Dashboard</p>
-        <p className="mono" style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-          Phase 1 — completed / historical &nbsp;·&nbsp; Phase 2 — current research, pre-registration only
+        <p>Transformer Engineered for Sequential State Evaluation and Recursive Action</p>
+        <p className="mono" style={{ fontSize: '0.68rem', color: 'var(--accent-cyan)', marginTop: '0.35rem', letterSpacing: '0.16em' }}>
+          {selectedExperiment === 'phase2' ? 'PHASE 2 · RESEARCH' : 'PHASE 1 · COMPLETED'}
         </p>
       </div>
 

@@ -75,14 +75,14 @@ export function CrucibleSection({ data, error }) {
           <div style={{ width: '100%', height: 260 }}>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={lossSeries} margin={{ top: 20, right: 30, left: 10, bottom: 10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#1b2432" />
                 <XAxis dataKey="step" stroke="#64748b" />
                 <YAxis stroke="#64748b" scale="log" domain={['auto', 'auto']} />
                 <Tooltip
-                  contentStyle={{ backgroundColor: '#111827', borderColor: '#1e293b', color: '#f8fafc' }}
+                  contentStyle={{ backgroundColor: '#0e131c', borderColor: '#1b2432', color: '#e6ecf5' }}
                   formatter={(val) => [fmtNum(val, 6), 'Loss']}
                 />
-                <Line type="monotone" dataKey="loss" stroke="#f43f5e" strokeWidth={2.5} dot={false} />
+                <Line type="monotone" dataKey="loss" stroke="#c9646f" strokeWidth={2.5} dot={false} />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -99,14 +99,14 @@ export function CrucibleSection({ data, error }) {
               <div style={{ width: '100%', height: 260 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={bpttData} margin={{ top: 20, right: 30, left: 10, bottom: 10 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1b2432" />
                     <XAxis dataKey="step" stroke="#64748b" />
                     <YAxis stroke="#64748b" />
                     <Tooltip
-                      contentStyle={{ backgroundColor: '#111827', borderColor: '#1e293b', color: '#f8fafc' }}
+                      contentStyle={{ backgroundColor: '#0e131c', borderColor: '#1b2432', color: '#e6ecf5' }}
                       formatter={(val) => [fmtNum(val, 6), 'Gradient norm']}
                     />
-                    <Bar dataKey="grad_norm" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="grad_norm" fill="#8b7cf6" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>

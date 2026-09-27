@@ -51,14 +51,14 @@ export function KScalingSection({ data, error }) {
           <div style={{ width: '100%', height: 260 }}>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={results} margin={{ top: 20, right: 30, left: 20, bottom: 10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#1b2432" />
                 <XAxis dataKey="K" stroke="#64748b" />
                 <YAxis domain={[Math.min(...params) - yPad, Math.max(...params) + yPad]} stroke="#64748b" />
                 <Tooltip
-                  contentStyle={{ backgroundColor: '#111827', borderColor: '#1e293b', color: '#f8fafc' }}
+                  contentStyle={{ backgroundColor: '#0e131c', borderColor: '#1b2432', color: '#e6ecf5' }}
                   formatter={(val) => [fmtInt(val), 'Trainable parameters']}
                 />
-                <Line type="monotone" dataKey="parameter_count" stroke="#06b6d4" strokeWidth={3} dot={{ r: 6, fill: '#06b6d4' }} />
+                <Line type="monotone" dataKey="parameter_count" stroke="#35c6f4" strokeWidth={3} dot={{ r: 6, fill: '#35c6f4' }} />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -72,14 +72,14 @@ export function KScalingSection({ data, error }) {
           <div style={{ width: '100%', height: 260 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={results} margin={{ top: 20, right: 30, left: 20, bottom: 10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#1b2432" />
                 <XAxis dataKey="K" stroke="#64748b" />
                 <YAxis stroke="#64748b" />
                 <Tooltip
-                  contentStyle={{ backgroundColor: '#111827', borderColor: '#1e293b', color: '#f8fafc' }}
+                  contentStyle={{ backgroundColor: '#0e131c', borderColor: '#1b2432', color: '#e6ecf5' }}
                   formatter={(val) => [fmtNum(val, 2, ' ms'), 'Median latency']}
                 />
-                <Bar dataKey="latency_median_ms" fill="#10b981" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="latency_median_ms" fill="#4fae7e" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -94,11 +94,11 @@ export function KScalingSection({ data, error }) {
             recursive_calls column
           </span>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${results.length}, 1fr)`, gap: '1rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1rem' }}>
           {results.map((r) => (
-            <div key={r.K} style={{ padding: '0.75rem', backgroundColor: '#090d16', borderRadius: '0.375rem', border: '1px solid #1e293b' }}>
+            <div key={r.K} style={{ padding: '0.75rem 0.85rem', backgroundColor: 'var(--bg-inset)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', minWidth: 0 }}>
               <div className="mono" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>K = {r.K}</div>
-              <div style={{ color: 'var(--accent-cyan)', fontSize: '1.1rem', letterSpacing: '0.15em', margin: '0.3rem 0' }}>
+              <div style={{ color: 'var(--accent-cyan)', fontSize: '1.1rem', letterSpacing: '0.15em', margin: '0.3rem 0', wordBreak: 'break-all' }}>
                 {isNum(r.recursive_calls) ? '█'.repeat(r.recursive_calls) : MISSING}
               </div>
               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{fmtInt(r.recursive_calls)} executions</div>

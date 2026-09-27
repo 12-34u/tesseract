@@ -15,7 +15,7 @@ import { fmtInt, fmtNum, isNum, MISSING, uniqueSorted } from '../format';
 import { Provenance, Unavailable } from './Provenance';
 
 const TITLE = 'Phase 1 · Cellular Automaton (Rule 90, Transformation Depth T × Recursive Depth K)';
-const LINE_COLORS = ['#06b6d4', '#10b981', '#f59e0b', '#8b5cf6', '#f43f5e', '#3b82f6'];
+const LINE_COLORS = ['#35c6f4', '#4fae7e', '#c9963f', '#8b7cf6', '#c9646f', '#5b9ef5'];
 const METRIC_KEYS = {
   train: { exact_match: 'train_exact_match', token_acc: 'train_token_accuracy' },
   val: { exact_match: 'val_exact_match', token_acc: 'val_token_accuracy' },
@@ -139,7 +139,7 @@ export function CASection({ data, error }) {
                   const val = cell(tv, kv, splitMode, metricMode);
                   const background =
                     val === null ? 'transparent' : val === 0 ? 'rgba(244, 63, 94, 0.08)' : `rgba(6, 182, 212, ${0.1 + (val / 100) * 0.4})`;
-                  const color = val === null ? 'var(--text-muted)' : val === 0 ? 'var(--accent-rose)' : '#ffffff';
+                  const color = val === null ? 'var(--text-muted)' : val === 0 ? 'var(--accent-rose)' : '#e6ecf5';
                   return (
                     <td key={kv} className="matrix-cell" style={{ backgroundColor: background, color }}>
                       {fmtNum(val, 1, '%')}
@@ -171,10 +171,10 @@ export function CASection({ data, error }) {
           <div style={{ width: '100%', height: 260 }}>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={lineData} margin={{ top: 20, right: 30, left: 10, bottom: 10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#1b2432" />
                 <XAxis dataKey="K" stroke="#64748b" />
                 <YAxis stroke="#64748b" domain={[0, 100]} />
-                <Tooltip contentStyle={{ backgroundColor: '#111827', borderColor: '#1e293b', color: '#f8fafc' }} formatter={pct} />
+                <Tooltip contentStyle={{ backgroundColor: '#0e131c', borderColor: '#1b2432', color: '#e6ecf5' }} formatter={pct} />
                 <Legend />
                 {tValues.map((tv, i) => (
                   <Line key={tv} type="monotone" dataKey={`T=${tv}`} stroke={LINE_COLORS[i % LINE_COLORS.length]} strokeWidth={2} />
@@ -203,15 +203,15 @@ export function CASection({ data, error }) {
           <div style={{ width: '100%', height: 260 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={barData} margin={{ top: 20, right: 30, left: 10, bottom: 10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#1b2432" />
                 <XAxis dataKey="name" stroke="#64748b" />
                 <YAxis stroke="#64748b" domain={[0, 100]} />
-                <Tooltip contentStyle={{ backgroundColor: '#111827', borderColor: '#1e293b', color: '#f8fafc' }} formatter={pct} />
+                <Tooltip contentStyle={{ backgroundColor: '#0e131c', borderColor: '#1b2432', color: '#e6ecf5' }} formatter={pct} />
                 <Legend />
-                <Bar dataKey="Train Exact Match" fill="#06b6d4" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="Val Exact Match" fill="#f43f5e" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="Train Token Acc" fill="#10b981" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="Val Token Acc" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Train Exact Match" fill="#35c6f4" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Val Exact Match" fill="#c9646f" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Train Token Acc" fill="#4fae7e" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Val Token Acc" fill="#c9963f" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
