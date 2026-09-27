@@ -29,6 +29,3 @@ runs/*
 # Environment Variables & OS
 .env
 .DS_Store
-
-# Local browser-verification artifacts (screenshots, console logs).
-.playwright-mcp/
