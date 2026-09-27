@@ -115,12 +115,21 @@ def forward_flops(d_model: int, d_ff: int, vocab_size: int, n: int, block_execut
     return block_executions * per_block + 2 * n * d * vocab_size
 
 
-def match_parameters(config: ModelConfig, num_layers: int, target: int) -> Tuple[int, int]:
+def match_parameters(config: ModelConfig, num_layers: int, target: int,
+                     normalisation_parameters_per_d_model: int = 0) -> Tuple[int, int]:
     """(d_model, d_ff) for an L-layer unrolled model with ≈ ``target`` parameters.
 
     For each d_model (a multiple of num_heads, up to the prototype's), d_ff is
     solved exactly. The pair whose d_ff/d_model ratio is closest to the
     prototype's is chosen (larger d_model on ties).
+
+    ``normalisation_parameters_per_d_model`` accounts for normalisation layers
+    added to both sides by a residual-confound fix. Their cost scales with
+    d_model, and the baseline's d_model is what is being solved for, so it
+    cannot be folded into ``target`` beforehand: at the matched width the
+    baseline's norms are cheaper than Tesseract's. Passing the per-d_model
+    coefficient (2 for one LayerNorm, 4 for a pair) lets the solver subtract
+    the right amount at each candidate width instead of leaving a drift.
 
     Shrinking d_model also narrows the attention head dimension, the embedding
     and the output head; see the module docstring and the ``known_confound``
@@ -131,6 +140,7 @@ def match_parameters(config: ModelConfig, num_layers: int, target: int) -> Tuple
     best = None
     for d in range(config.num_heads, config.d_model + 1, config.num_heads):
         base = model_parameter_count(config.vocab_size, d, 0, config.max_seq_len, num_layers)
+        base += normalisation_parameters_per_d_model * d
         f = round((target - base) / (num_layers * (2 * d + 1)))
         if f < 1:
             continue

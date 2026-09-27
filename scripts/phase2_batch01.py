@@ -28,6 +28,8 @@ import torch  # noqa: E402
 
 from phase2.batch01 import (  # noqa: E402
     CurriculumStream,
+    apply_per_step_norm,
+    hidden_state_norms,
     FixedSetStream,
     WarmupCosine,
     apply_final_layer_norm,
@@ -109,11 +111,18 @@ def record_for(model, val, device, benchmark, seed, k, outcome, cell_dir) -> dic
     }
 
 
-def build(cell_family, k, model_cfg, n, device, seed, fix: bool):
+def build(cell_family, k, model_cfg, n, device, seed, fix):
+    """`fix` is False/"none", "output" (Arm 2b) or "per_step" (Arm 2c)."""
     set_seed(seed)
     built = build_model(cell_family, k, model_cfg, n)
     model = built.model.to(device)
-    patched = apply_final_layer_norm(model, model_cfg.vocab_size) if fix else None
+    mode = "output" if fix is True else ("none" if fix is False else fix)
+    if mode == "output":
+        patched = apply_final_layer_norm(model, model_cfg.vocab_size)
+    elif mode == "per_step":
+        patched = apply_per_step_norm(model)
+    else:
+        patched = None
     return model, built, patched
 
 
@@ -194,6 +203,27 @@ def arm2a(args):
     return 0
 
 
+GROWTH_LIMIT = 1.05
+
+
+def arm2c_gate(device, benchmark, model_cfg, val, run_dir) -> bool:
+    """2c-i: per-step RMS must be bounded before 2c-ii may run."""
+    rows = []
+    for k in (1, 2, 4, 8):
+        model, _, patched = build("tesseract", k, model_cfg, benchmark.n, device, SEEDS[0], "per_step")
+        norms = hidden_state_norms(model, val.inputs[:256], device)
+        growth = norms[-1]["z_L_rms"] / norms[0]["z_L_rms"]
+        rows.append({"k": k, "patched_module": patched, "per_step": norms,
+                     "z_L_rms_first": norms[0]["z_L_rms"], "z_L_rms_last": norms[-1]["z_L_rms"],
+                     "growth_ratio": growth, "bounded": bool(growth < GROWTH_LIMIT)})
+        print(f"  K={k}: rms {norms[0]['z_L_rms']:.3f} -> {norms[-1]['z_L_rms']:.3f}  growth {growth:.3f}x")
+    passed = all(r["bounded"] for r in rows)
+    write_json(run_dir / "arm2c_gate.json",
+               {"arm": "2c-i", "growth_limit": GROWTH_LIMIT, "rows": rows, "gate_passed": passed})
+    print(f"  bounded-growth gate: {'PASS' if passed else 'FAIL'}")
+    return passed
+
+
 def _training_arm(name, args, *, fix: bool, curriculum: bool, steps: int, schedule=None, question=""):
     device, provenance, benchmark, model_cfg, val = setup()
     run_dir = out_dir(name)
@@ -267,7 +297,7 @@ def _stage_diagnostics(model, benchmark, device, outcome, boundaries):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--arm", required=True, choices=["1", "2a", "2b", "3", "4"])
+    parser.add_argument("--arm", required=True, choices=["1", "2a", "2b", "2c", "3", "4"])
     parser.add_argument("--steps", type=int, default=20000)
     args = parser.parse_args()
 
@@ -276,13 +306,24 @@ def main() -> int:
     if args.arm == "2a":
         return arm2a(args)
     if args.arm == "2b":
-        return _training_arm("arm2b_residual_fix", args, fix=True, curriculum=False, steps=20000,
+        return _training_arm("arm2b_residual_fix", args, fix="output", curriculum=False, steps=20000,
                              question="does removing the residual confound change learnability?")
+    if args.arm == "2c":
+        device, provenance, benchmark, model_cfg, val = setup()
+        gate_dir = out_dir("arm2c_per_step_norm")
+        gate_dir.mkdir(parents=True, exist_ok=True)
+        print("=== Arm 2c-i: per-step hidden-state RMS (must be bounded)")
+        if not arm2c_gate(device, benchmark, model_cfg, val, gate_dir):
+            print("Arm 2c-i failed the bounded-growth gate; 2c-ii is not run.", file=sys.stderr)
+            return 1
+        return _training_arm("arm2c_per_step_norm_train", args, fix="per_step", curriculum=False, steps=20000,
+                             question="does bounding hidden-state growth change learnability?")
+
     if args.arm == "3":
-        return _training_arm("arm3_curriculum", args, fix=False, curriculum=True, steps=35000,
+        return _training_arm("arm3_curriculum", args, fix="none", curriculum=True, steps=35000,
                              question="is a cold-start gradient the blocker?")
     if args.arm == "4":
-        return _training_arm("arm4_warmup", args, fix=False, curriculum=False, steps=40000,
+        return _training_arm("arm4_warmup", args, fix="none", curriculum=False, steps=40000,
                              schedule=WarmupCosine(peak=1e-3, final=1e-4, warmup_steps=2000, total_steps=40000),
                              question="is the plateau an optimisation artefact?")
     return 1

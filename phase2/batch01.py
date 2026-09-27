@@ -265,3 +265,79 @@ def hidden_state_norms(model: nn.Module, inputs: np.ndarray, device: torch.devic
 def layer_norm_parameter_cost(d_model: int) -> int:
     """Parameters a final LayerNorm adds: one weight and one bias per feature."""
     return 2 * d_model
+
+
+# ---------------------------------------------------------------------------
+# Arm 2c — per-step normalisation inside the recursion
+# ---------------------------------------------------------------------------
+
+
+class PerStepNormalisedReasoner(nn.Module):
+    """The frozen recursion, with z_L and z_H normalised after every block call.
+
+    The residual stream grows because nothing bounds z_L between executions:
+    measured RMS rises 1.43 -> 25.30 over eight steps. An output-side norm hides
+    that in the loss without touching it. This bounds the state where the growth
+    happens.
+
+    ``models/`` is frozen, so this does not edit the reasoner. It wraps the
+    existing one and reuses its parameters — the same shared TransformerBlock
+    and the same learnable initial states — reproducing the recorded update rule
+
+        m^(k)   = z_L^(k-1) + z_H^(k-1) + x_emb
+        z_L^(k) = f_theta(m^(k))
+        z_H^(k) = alpha * z_H^(k-1) + (1 - alpha) * z_L^(k)
+
+    and adding a normalisation of each state at the end of the step. The two
+    LayerNorms are shared across steps, exactly as the block is, so the
+    parameter count stays independent of K.
+    """
+
+    def __init__(self, reasoner: nn.Module) -> None:
+        super().__init__()
+        self.inner = reasoner
+        self.d_model = reasoner.d_model
+        self.num_recursive_steps = reasoner.num_recursive_steps
+        self.alpha = reasoner.alpha
+        self.norm_L = nn.LayerNorm(self.d_model)
+        self.norm_H = nn.LayerNorm(self.d_model)
+
+    @property
+    def shared_block(self) -> nn.Module:
+        return self.inner.shared_block
+
+    def forward(self, x_emb: torch.Tensor, return_states: bool = False):
+        if x_emb.ndim != 3:
+            raise ValueError(f"Expected 3D input [B, N, D], got shape {list(x_emb.shape)}.")
+        b, n, d = x_emb.shape
+        if d != self.d_model:
+            raise ValueError(f"Input dimension D ({d}) does not match d_model ({self.d_model}).")
+
+        z_H = self.inner.learnable_init_H.unsqueeze(0).unsqueeze(0).expand(b, n, d)
+        z_L = self.inner.learnable_init_L.unsqueeze(0).unsqueeze(0).expand(b, n, d)
+        history = [] if return_states else None
+
+        for _ in range(self.num_recursive_steps):
+            merged = z_L + z_H + x_emb
+            z_L = self.shared_block(merged)
+            z_H = self.alpha * z_H + (1 - self.alpha) * z_L
+            # The single change: bound both states before the next execution.
+            z_L = self.norm_L(z_L)
+            z_H = self.norm_H(z_H)
+            # No detach: full BPTT through every step, as in the frozen reasoner.
+            if return_states:
+                history.append({"z_H": z_H, "z_L": z_L})
+        return z_L, history
+
+
+def per_step_norm_parameter_cost(d_model: int) -> int:
+    """Parameters per-step normalisation adds: two LayerNorms, shared across steps."""
+    return 2 * layer_norm_parameter_cost(d_model)
+
+
+def apply_per_step_norm(model: nn.Module) -> str:
+    """Replace the reasoner with the per-step-normalised one. Returns the path patched."""
+    if not hasattr(model, "reasoner"):
+        raise ValueError("model has no `reasoner` to normalise; per-step norm applies to the shared-block family")
+    model.reasoner = PerStepNormalisedReasoner(model.reasoner)
+    return "reasoner"

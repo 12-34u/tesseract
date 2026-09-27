@@ -232,3 +232,98 @@ def test_warmup_cosine_matches_its_preregistered_shape():
     assert rising == sorted(rising)
     falling = [schedule.lr_at(s) for s in range(2000, 40000, 4000)]
     assert falling == sorted(falling, reverse=True)
+
+
+# ---------------------------------------------------------------------------
+# Arm 2c — per-step normalisation must actually bound the stream
+# ---------------------------------------------------------------------------
+
+
+def test_per_step_norm_bounds_the_residual_growth(setup):
+    """The fix Arm 2c tests, and the property it is chosen for.
+
+    The output-side norm leaves growth at 17.7x; this must hold the state
+    bounded at every recursion step and every K, which is what the Arm 2c-i
+    gate checks before any training runs.
+    """
+    from phase2.batch01 import apply_per_step_norm
+
+    benchmark, cfg, val = setup
+    inputs = val.inputs[:64]
+    for k in (1, 2, 4, 8):
+        set_seed(0)
+        model = build_model("tesseract", k, cfg, benchmark.n).model
+        apply_per_step_norm(model)
+        rows = hidden_state_norms(model, inputs, torch.device("cpu"))
+        assert len(rows) == k
+        growth = rows[-1]["z_L_rms"] / rows[0]["z_L_rms"]
+        assert growth < 1.05, f"K={k} still grows {growth:.2f}x under per-step normalisation"
+
+
+def test_per_step_norm_reuses_the_shared_block_and_keeps_params_k_independent(setup):
+    """The fix must not add a second block or make parameters depend on K."""
+    from models.block import TransformerBlock
+    from phase2.batch01 import apply_per_step_norm, per_step_norm_parameter_cost
+
+    _, cfg, _ = setup
+    counts = []
+    for k in (1, 8):
+        set_seed(0)
+        model = build_model("tesseract", k, cfg, 17).model
+        before = count_parameters(model)["trainable"]
+        apply_per_step_norm(model)
+        after = count_parameters(model)["trainable"]
+        assert after - before == per_step_norm_parameter_cost(cfg.d_model)
+        assert len([m for m in model.modules() if isinstance(m, TransformerBlock)]) == 1
+        counts.append(after)
+    assert counts[0] == counts[1], "parameter count must stay independent of K"
+
+
+def test_per_step_norm_preserves_the_recorded_update_rule(setup):
+    """Same shared block, same learnable inits, same K, full BPTT retained."""
+    from phase2.batch01 import PerStepNormalisedReasoner, apply_per_step_norm
+
+    _, cfg, _ = setup
+    set_seed(0)
+    model = build_model("tesseract", 4, cfg, 17).model
+    original_block = model.reasoner.shared_block
+    original_alpha = model.reasoner.alpha
+    apply_per_step_norm(model)
+    assert isinstance(model.reasoner, PerStepNormalisedReasoner)
+    assert model.reasoner.shared_block is original_block
+    assert model.reasoner.alpha == original_alpha
+    assert model.reasoner.num_recursive_steps == 4
+
+    x = torch.randint(0, VOCAB, (2, 17))
+    logits, history = model(x, return_states=True)
+    assert len(history) == 4
+    logits.sum().backward()
+    assert original_block.attn.qkv_proj.weight.grad is not None, "gradient must reach the shared block"
+
+
+def test_match_parameters_accounts_for_added_normalisation(setup):
+    """Without the correction the matched baseline inherits a drift."""
+    from phase2.models import match_parameters, model_parameter_count
+
+    _, cfg, _ = setup
+    target_plain = model_parameter_count(VOCAB, cfg.d_model, cfg.d_ff, cfg.max_seq_len, 1)
+    target_fixed = target_plain + 4 * cfg.d_model
+
+    d_un, f_un = match_parameters(cfg, 8, target_fixed)
+    uncorrected = model_parameter_count(VOCAB, d_un, f_un, cfg.max_seq_len, 8) + 4 * d_un
+    d_c, f_c = match_parameters(cfg, 8, target_fixed, normalisation_parameters_per_d_model=4)
+    corrected = model_parameter_count(VOCAB, d_c, f_c, cfg.max_seq_len, 8) + 4 * d_c
+
+    assert abs(corrected - target_fixed) <= abs(uncorrected - target_fixed)
+    assert abs(corrected - target_fixed) / target_fixed < 0.01
+
+
+def test_match_parameters_is_unchanged_when_no_normalisation_is_added(setup):
+    """The default must reproduce the recorded baseline widths exactly."""
+    from phase2.models import match_parameters
+
+    _, cfg, _ = setup
+    for layers in (1, 2, 4, 8):
+        target = 837_436
+        assert match_parameters(cfg, layers, target) == \
+            match_parameters(cfg, layers, target, normalisation_parameters_per_d_model=0)

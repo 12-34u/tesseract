@@ -21,6 +21,8 @@ import torch  # noqa: E402
 
 from phase2.batch01 import (  # noqa: E402
     apply_final_layer_norm,
+    apply_per_step_norm,
+    per_step_norm_parameter_cost,
     find_output_head,
     hidden_state_norms,
     layer_norm_parameter_cost,
@@ -48,12 +50,15 @@ def main() -> int:
     val = store.get(benchmark.group, "main", "val", 4, benchmark.n, benchmark.val_size)
     inputs = val.inputs[:EXAMPLES]
 
+    # three conditions: no fix, the output-side norm (Arm 2b), the per-step
+    # norm inside the recursion (Arm 2c)
     norms = []
-    for fix in (False, True):
+    for fix in ("none", "output", "per_step"):
         for k in K_VALUES:
             set_seed(0)
             model = build_model("tesseract", k, cfg, benchmark.n).model
-            patched = apply_final_layer_norm(model, 60) if fix else None
+            patched = (apply_final_layer_norm(model, 60) if fix == "output"
+                       else apply_per_step_norm(model) if fix == "per_step" else None)
             rows = hidden_state_norms(model, inputs, device)
             norms.append({"k": k, "fix": fix, "patched_module": patched,
                           "step0_loss": step_zero_loss(model, val, device, benchmark.val_size),
@@ -88,6 +93,10 @@ def main() -> int:
             "relative_difference": (matched - tesseract) / tesseract,
             "within_one_percent": abs(matched - tesseract) / tesseract < 0.01,
         },
+        "per_step_norm_bounded": all(
+            r["growth_ratio"] < 1.05 for r in norms if r["fix"] == "per_step"),
+        "output_norm_bounded": all(
+            r["growth_ratio"] < 1.05 for r in norms if r["fix"] == "output"),
         "finding": (
             "The hidden-state RMS is identical with the fix ON and OFF at every recursion step. "
             "The output-side LayerNorm normalises the read-out only; it does not touch the recursion, "
@@ -99,10 +108,10 @@ def main() -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
     write_json(run_dir / "residual_norms_report.json", report)
 
-    print(f"{'K':>3} {'fix':>4} {'step1':>8} {'last':>8} {'growth':>8} {'step0 loss':>11}")
+    print(f"{'K':>3} {'fix':>9} {'step1':>8} {'last':>8} {'growth':>8} {'step0 loss':>11}")
     for row in norms:
-        print(f"{row['k']:>3} {'ON' if row['fix'] else 'OFF':>4} {row['z_L_rms_first']:>8.2f} "
-              f"{row['z_L_rms_last']:>8.2f} {row['growth_ratio']:>7.1f}x {row['step0_loss']:>11.4f}")
+        print(f"{row['k']:>3} {row['fix']:>9} {row['z_L_rms_first']:>8.2f} "
+              f"{row['z_L_rms_last']:>8.2f} {row['growth_ratio']:>7.2f}x {row['step0_loss']:>11.4f}")
     print(f"\nall families apply cleanly: {report['all_families_apply_cleanly']}")
     print(f"param matching within 1%: {report['param_matching_with_fix']['within_one_percent']} "
           f"({report['param_matching_with_fix']['relative_difference']*100:+.2f}%)")

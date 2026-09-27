@@ -214,3 +214,99 @@ Amendment 02 and launching the grid are not decisions this batch makes.
 Explicitly not run: parameter or width scaling (P1b already showed width alone
 does not escape the plateau; scaling is revisited only after something learns),
 and **T = 8 in any arm**.
+
+---
+
+# Addendum 01 — Arm 2c, per-step normalisation
+
+**Date: 2026-09-27. Appended after Arm 2a was measured and before Arm 2c was
+executed. Nothing above this line has been edited; §§1–11 stand as originally
+committed (`7dbd7b6`), including the parts this addendum supersedes.**
+
+## A1.1 Why this addendum exists
+
+§5 proposed a final LayerNorm before the output projection as the residual-
+confound fix, and Arm 2a was read as confirming it because step-0 loss became
+K-invariant. That reading was wrong. A normalisation immediately before the
+vocabulary projection makes step-0 loss K-invariant **by construction**,
+whatever the hidden state is doing, so it cannot be evidence that the confound
+is gone.
+
+Measuring the quantity the confound is actually about — the RMS of the hidden
+state after each recursion step, untrained, 256 validation inputs — shows the
+output-side norm leaves it untouched:
+
+| K=8, z_L RMS per step | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | growth |
+|---|---|---|---|---|---|---|---|---|---|
+| no fix | 1.43 | 3.00 | 4.86 | 7.16 | 10.09 | 13.89 | 18.83 | 25.30 | 17.70× |
+| output-side norm | 1.43 | 3.00 | 4.86 | 7.16 | 10.09 | 13.89 | 18.83 | 25.30 | 17.70× |
+
+Identical to every digit. **Arm 2b, which is already running, therefore tests
+whether read-out normalisation changes learnability, and nothing more. The
+report must state that, and must not describe Arm 2b as removing the
+confound.**
+
+## A1.2 Arm 2c — per-step normalisation inside the recursion
+
+The chosen fix: **normalise z_L and z_H after every block call.** Rejected
+alternatives and why — scaled residual updates (1/K or 1/√K) introduce a
+K-dependent term into the function on the very axis under test; reporting-only
+leaves every K comparison open to attack.
+
+`models/` is frozen, so the fix does not edit the reasoner. It wraps it,
+reusing the same shared `TransformerBlock` and the same learnable initial
+states, and reproduces the recorded update rule with a normalisation of each
+state at the end of the step. The two LayerNorms are shared across steps, as
+the block is, so the added parameter count is independent of K: **+4·d_model**
+(1,024 at d_model 256).
+
+**Arm 2c runs in two parts.**
+
+**2c-i — step-0 hidden-state RMS table at K ∈ {1, 2, 4, 8}.** No training.
+Pre-registered pass condition: **the RMS must be bounded — growth ratio from
+the first recursion step to the last below 1.05 at every K.** A fix that leaves
+the stream growing fails here and Arm 2c-ii does not run.
+
+**2c-ii — training.** T = 4, K ∈ {1, 8}, **3 seeds**, 20,000 steps, everything
+else REF. Judged by the §3 success rule, unchanged.
+
+## A1.3 Supersedes: the Stage 3 residual clause
+
+The §10 clause "residual fix (ON if Arm 2 helped **or is neutral**, since the
+confound must be removed regardless)" is replaced by:
+
+> **a fix that bounds hidden-state growth, verified by per-step norms**
+
+An output-side normalisation does not satisfy this. Only a fix whose measured
+per-step RMS is bounded (§A1.2 pass condition) may be recorded in Amendment 02
+as the residual fix. The rest of the §10 table is unchanged.
+
+## A1.4 Parameter matching
+
+`match_parameters` now takes the per-d_model cost of any added normalisation
+and subtracts it at each candidate width, rather than tolerating the drift. The
+cost cannot be folded into the target beforehand, because the baseline's
+d_model is what is being solved for and its norms are cheaper than Tesseract's
+at the matched width. Measured drift for the param_matched baseline at L = 8
+improves from **−0.055 %** to **+0.033 %**.
+
+Scope note: per-step normalisation applies to the shared-block family, which is
+the family that has a recursion. The unrolled and parameter-matched baselines
+execute distinct blocks and need the equivalent check made separately before
+any cross-family comparison under the fix.
+
+## A1.5 Compute
+
+Arm 2c-ii costs **1.53 GPU-h** (identical in shape to Arm 2b); 2c-i is a
+structural measurement of the order of a minute.
+
+| | GPU-h |
+|---|---|
+| Arms 1–4 (§9) | 7.78 |
+| **+ Arm 2c** | **9.31** |
+| + Arm 5 worst case (4.20) | 13.51 |
+
+**Arm 2c alone keeps the batch at 9.31 GPU-h, under the 12-hour limit, so it is
+queued after Arm 4 as instructed.** Adding the conditional Arm 5 afterwards
+would reach **13.51 GPU-h and exceed the limit**, so Arm 5 now requires
+explicit approval on compute grounds as well as on its own trigger condition.
