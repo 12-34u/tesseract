@@ -13,6 +13,7 @@ import {
 } from 'recharts';
 import { fmtInt, fmtNum, isNum, MISSING, uniqueSorted } from '../format';
 import { Provenance, Unavailable } from './Provenance';
+import { cellStyle } from '../phase1/caMatrix';
 
 const TITLE = 'Phase 1 · Cellular Automaton (Rule 90, Transformation Depth T × Recursive Depth K)';
 const LINE_COLORS = ['#35c6f4', '#4fae7e', '#c9963f', '#8b7cf6', '#c9646f', '#5b9ef5'];
@@ -23,7 +24,10 @@ const METRIC_KEYS = {
 const pct = (val) => [fmtNum(val, 1, '%'), 'Accuracy'];
 
 export function CASection({ data, error }) {
-  const [metricMode, setMetricMode] = useState('exact_match');
+  // Token accuracy is the default view: validation exact match is 0.0 % in
+  // every cell, which is a genuine recorded result but tells the reader
+  // nothing about how the cells differ. Exact match stays one click away.
+  const [metricMode, setMetricMode] = useState('token_acc');
   const [splitMode, setSplitMode] = useState('val');
   const [selectedT, setSelectedT] = useState(null);
   const [selectedK, setSelectedK] = useState(null);
@@ -137,9 +141,7 @@ export function CASection({ data, error }) {
                 <td style={{ fontWeight: 'bold', color: 'var(--accent-cyan)', textAlign: 'left' }}>T = {tv}</td>
                 {kValues.map((kv) => {
                   const val = cell(tv, kv, splitMode, metricMode);
-                  const background =
-                    val === null ? 'transparent' : val === 0 ? 'rgba(244, 63, 94, 0.08)' : `rgba(6, 182, 212, ${0.1 + (val / 100) * 0.4})`;
-                  const color = val === null ? 'var(--text-muted)' : val === 0 ? 'var(--accent-rose)' : '#e6ecf5';
+                  const { background, color } = cellStyle(val, metricMode);
                   return (
                     <td key={kv} className="matrix-cell" style={{ backgroundColor: background, color }}>
                       {fmtNum(val, 1, '%')}
@@ -158,6 +160,13 @@ export function CASection({ data, error }) {
             ` Validation exact match is 0.0% in all ${valEm.length} cells while validation token accuracy is ` +
               `${fmtNum(Math.min(...valTok))}–${fmtNum(Math.max(...valTok), 1, '%')} (chance ≈ 50%): with N tokens per sequence, ` +
               'a single wrong token fails the whole sequence. See PHASE1_FINAL_AUDIT.md.'}
+        </div>
+        <div className="card-subtext" style={{ marginTop: '0.5rem' }}>
+          Cells are shaded by margin above chance
+          {metricMode === 'token_acc' ? ' (50 % for binary Rule 90)' : ''}, not by low-is-bad.
+          Rule 90 is degenerate on this T grid: for T = 2<sup>m</sup> the target collapses to a two-cell XOR,
+          target[i] = x[i−T] ⊕ x[i+T], so larger T widens the span without deepening the computation.
+          See PHASE2_BENCHMARK_DESIGN.md.
         </div>
       </div>
 
