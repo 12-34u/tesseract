@@ -20,6 +20,7 @@ import hashlib
 import json
 import sys
 from pathlib import Path
+from typing import Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -95,12 +96,40 @@ def run_one(cell, model_cfg, benchmark, training, device, cell_dir, provenance, 
                     provenance=provenance, warm_start=warm_start, stop_condition=stop_condition)
 
 
+def completed(cell_dir: Path) -> bool:
+    """A run counts as completed only if it recorded a result AND said so in its metadata."""
+    result, metadata = Path(cell_dir) / "result.json", Path(cell_dir) / "run_metadata.json"
+    if not (result.is_file() and metadata.is_file()):
+        return False
+    return json.loads(metadata.read_text(encoding="utf-8")).get("status") == "completed"
+
+
+def resolve_attempt_dir(cell_dir: Path) -> Tuple[Path, Optional[str]]:
+    """Return where to train, leaving any interrupted attempt exactly as it is.
+
+    A run killed mid-flight (status still "running") is preserved untouched - it
+    is a record of what happened, not rubbish to tidy away. The retry goes to a
+    sibling directory, and the caller records which directory was superseded.
+    """
+    cell_dir = Path(cell_dir)
+    if not cell_dir.exists() or not any(cell_dir.iterdir()):
+        return cell_dir, None
+    attempt = 2
+    while (cell_dir.parent / f"{cell_dir.name}__attempt{attempt}").exists():
+        attempt += 1
+    return cell_dir.parent / f"{cell_dir.name}__attempt{attempt}", str(cell_dir)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--probe", choices=["a", "b"], required=True)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--eval-every", type=int, default=250)
     parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--resume", action="store_true",
+                        help="reuse every completed run in the output directory and train only what is missing. "
+                             "An interrupted directory is never deleted or overwritten: the retry is written "
+                             "alongside it with an __attemptN suffix.")
     args = parser.parse_args()
 
     if not torch.cuda.is_available():
@@ -124,8 +153,9 @@ def main() -> int:
     store = SplitStore(splits_dir(), benchmark.data_seed)
 
     run_dir = resolve_run_dir(args.output_dir or f"phase2/probe_{args.probe}")
-    if run_dir.exists() and any(run_dir.iterdir()):
-        raise RuntimeError(f"{run_dir} already contains results; it is preserved. Use a new output directory.")
+    if run_dir.exists() and any(run_dir.iterdir()) and not args.resume:
+        raise RuntimeError(f"{run_dir} already contains results; it is preserved. Use a new output directory, "
+                           f"or --resume to train only the runs that are missing.")
     run_dir.mkdir(parents=True, exist_ok=True)
 
     target_t = spec["t"]
@@ -147,11 +177,18 @@ def main() -> int:
             if spec["warm_start"]:
                 warm_cell = CellSpec("tesseract", k, benchmark.group, "main", 1, seed)
                 warm_dir = run_dir / "warm_start" / warm_cell.cell_id
-                print(f"=== Probe B stage 1: T=1 K={k} seed={seed} (warm-start source) ===")
-                warm_result = run_one(warm_cell, model_cfg, benchmark,
-                                      training_config(steps, benchmark, args.eval_every, args.batch_size),
-                                      device, warm_dir, provenance,
-                                      stop_condition=lambda val: val.exact_match >= 99.0)
+                if args.resume and completed(warm_dir):
+                    print(f"=== Probe B stage 1: T=1 K={k} seed={seed} — reusing completed warm start ===")
+                    warm_result = json.loads((warm_dir / "result.json").read_text(encoding="utf-8"))
+                else:
+                    print(f"=== Probe B stage 1: T=1 K={k} seed={seed} (warm-start source) ===")
+                    warm_dir, superseded_warm = resolve_attempt_dir(warm_dir)
+                    warm_result = run_one(warm_cell, model_cfg, benchmark,
+                                          training_config(steps, benchmark, args.eval_every, args.batch_size),
+                                          device, warm_dir, provenance,
+                                          stop_condition=lambda val: val.exact_match >= 99.0)
+                    if superseded_warm:
+                        entry["stage1_superseded_interrupted_dir"] = superseded_warm
                 checkpoint = warm_dir / ("best_checkpoint.pt" if (warm_dir / "best_checkpoint.pt").is_file()
                                          else "final_checkpoint.pt")
                 state = torch.load(checkpoint, map_location=device)
@@ -166,8 +203,18 @@ def main() -> int:
                 print(f"    stage 1 finished: {warm_result['stopped_reason']} at step {warm_result['steps_run']}; "
                       f"warm-start scores {warm_start_reference['token_accuracy']:.3f}% on T={target_t}")
 
-            print(f"=== Probe {args.probe.upper()}: T={target_t} K={k} seed={seed} steps={steps} ===")
-            result = run_one(cell, model_cfg, benchmark, training, device, cell_dir, provenance, warm_start=warm_start)
+            if args.resume and completed(cell_dir):
+                print(f"=== Probe {args.probe.upper()}: T={target_t} K={k} seed={seed} — reusing completed run ===")
+                result = json.loads((cell_dir / "result.json").read_text(encoding="utf-8"))
+            else:
+                cell_dir, superseded = resolve_attempt_dir(cell_dir)
+                if superseded:
+                    print(f"    preserving the interrupted attempt at {superseded}; retrying in {cell_dir}")
+                    entry["superseded_interrupted_dir"] = superseded
+                print(f"=== Probe {args.probe.upper()}: T={target_t} K={k} seed={seed} steps={steps} ===")
+                result = run_one(cell, model_cfg, benchmark, training, device, cell_dir, provenance,
+                                 warm_start=warm_start)
+            entry["cell_dir"] = str(cell_dir)
 
             best_state = cell_dir / "best_checkpoint.pt"
             best_eval = evaluate_state(torch.load(best_state, map_location=device), model_cfg, benchmark, cell,
