@@ -82,6 +82,48 @@ def test_parameter_cost_is_two_layer_norms_and_independent_of_k():
     assert counts == {4 * D_MODEL}
 
 
+def test_non_affine_normalisation_adds_no_parameters():
+    config = PerStepNormConfig(enabled=True, elementwise_affine=False)
+    assert per_step_norm_parameter_cost(D_MODEL, config) == 0
+    for k in (1, 2, 4, 8):
+        wrapped = PerStepNormRecursion(core(k), config)
+        added = count_parameters(wrapped)["trainable"] - count_parameters(core(k))["trainable"]
+        assert added == 0, f"K={k} added {added}"
+        assert wrapped.norm_L.weight is None and wrapped.norm_L.bias is None
+
+
+def test_non_affine_has_nothing_to_learn_at_the_normalisation():
+    """The bound cannot drift during training because no gradient reaches the norm."""
+    x = embeddings()
+    wrapped = PerStepNormRecursion(core(4), PerStepNormConfig(enabled=True, elementwise_affine=False))
+    assert list(wrapped.norm_L.parameters()) == []
+    assert list(wrapped.norm_H.parameters()) == []
+    out, _ = wrapped(x)
+    out.sum().backward()  # must not fail for want of parameters
+    assert all(torch.isfinite(p.grad).all() for p in wrapped.parameters() if p.grad is not None)
+
+
+def test_non_affine_matches_affine_at_initialisation():
+    """Gain is 1 and bias 0 at init, so the untrained measurement cannot tell them apart."""
+    x = embeddings()
+    affine = PerStepNormRecursion(core(4), PerStepNormConfig(enabled=True))
+    non_affine = PerStepNormRecursion(core(4), PerStepNormConfig(enabled=True, elementwise_affine=False))
+    a, _ = affine(x)
+    b, _ = non_affine(x)
+    torch.testing.assert_close(a, b, rtol=1e-6, atol=1e-6)
+
+
+def test_non_affine_bounds_the_state_at_every_k():
+    x = embeddings()
+    for k in (1, 2, 4, 8):
+        wrapped = PerStepNormRecursion(core(k), PerStepNormConfig(enabled=True, elementwise_affine=False))
+        _, history = wrapped(x, return_states=True)
+        for state in history:
+            for key in ("z_L", "z_H"):
+                rms = state[key].pow(2).mean(dim=-1).sqrt().mean().item()
+                assert rms == pytest.approx(1.0, abs=0.01), f"K={k} {key} rms {rms}"
+
+
 def test_one_sided_normalisation_costs_half():
     config = PerStepNormConfig(enabled=True, normalise_z_H=False)
     assert per_step_norm_parameter_cost(D_MODEL, config) == 2 * D_MODEL

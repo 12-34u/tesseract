@@ -82,9 +82,12 @@ def main() -> int:
 
     off = PerStepNormConfig(enabled=False)
     on = PerStepNormConfig(enabled=True)
+    # The proposed Addendum 02 variant: no learnable gain or bias, so the bound
+    # cannot drift during training and the parameter cost is zero.
+    on_non_affine = PerStepNormConfig(enabled=True, elementwise_affine=False)
 
     rows = []
-    for config, flag in ((off, "OFF"), (on, "ON")):
+    for config, flag in ((off, "OFF"), (on, "ON"), (on_non_affine, "ON_NON_AFFINE")):
         for k in K_VALUES:
             set_seed(0)
             model = build_model("tesseract", k, cfg, benchmark.n).model
@@ -113,6 +116,7 @@ def main() -> int:
 
     on_rows = [r for r in rows if r["flag"] == "ON"]
     off_rows = [r for r in rows if r["flag"] == "OFF"]
+    non_affine_rows = [r for r in rows if r["flag"] == "ON_NON_AFFINE"]
 
     # Cross-check against the implementation on the GPU box. Imported, never
     # edited. If the two agree to floating-point noise, this diagnostic also
@@ -154,12 +158,19 @@ def main() -> int:
             "on_growth_ratios": {r["k"]: r["growth_ratio"] for r in on_rows},
             "off_z_L_rms_last": {r["k"]: r["z_L_rms_last"] for r in off_rows},
             "on_z_L_rms_last": {r["k"]: r["z_L_rms_last"] for r in on_rows},
+            "non_affine_z_L_rms_last": {r["k"]: r["z_L_rms_last"] for r in non_affine_rows},
             "off_bounded_within_run": all(r["growth_ratio"] < GROWTH_TOLERANCE for r in off_rows),
             "on_bounded_within_run": all(r["growth_ratio"] < GROWTH_TOLERANCE for r in on_rows),
+            "non_affine_bounded_within_run": all(
+                r["growth_ratio"] < GROWTH_TOLERANCE for r in non_affine_rows),
             "off_spread_across_k": spread(last("OFF")),
             "on_spread_across_k": spread(last("ON")),
+            "non_affine_spread_across_k": spread(last("ON_NON_AFFINE")),
             "on_bounded_across_k": spread(last("ON")) < ACROSS_K_TOLERANCE,
+            "non_affine_bounded_across_k": spread(last("ON_NON_AFFINE")) < ACROSS_K_TOLERANCE,
             "parameters_added_on": sorted({r["parameters_added"] for r in on_rows}),
+            "parameters_added_non_affine": sorted({r["parameters_added"] for r in non_affine_rows}),
+            "non_affine_is_free": all(r["parameters_added"] == 0 for r in non_affine_rows),
             "parameter_cost_independent_of_k": len({r["parameters_added"] for r in on_rows}) == 1,
             "parameter_cost_as_expected": all(
                 r["parameters_added"] == r["expected_added"] for r in rows),
@@ -181,12 +192,18 @@ def main() -> int:
     print()
     print(_table(off_rows, "Flag OFF — per-step z_L RMS"))
     print()
-    print(_table(on_rows, "Flag ON — per-step z_L RMS"))
+    print(_table(on_rows, "Flag ON, affine — per-step z_L RMS"))
     print()
-    print(f"bounded within run (ON):  {s['on_bounded_within_run']}")
-    print(f"bounded across K (ON):    {s['on_bounded_across_k']} "
+    print(_table(non_affine_rows, "Flag ON, affine=False — per-step z_L RMS"))
+    print()
+    print(f"bounded within run (ON):         {s['on_bounded_within_run']}")
+    print(f"bounded across K (ON):           {s['on_bounded_across_k']} "
           f"(spread {s['on_spread_across_k']*100:.2f}%)")
-    print(f"spread across K (OFF):    {s['off_spread_across_k']*100:.2f}%")
+    print(f"bounded across K (non-affine):   {s['non_affine_bounded_across_k']} "
+          f"(spread {s['non_affine_spread_across_k']*100:.2f}%)")
+    print(f"spread across K (OFF):           {s['off_spread_across_k']*100:.2f}%")
+    print(f"non-affine adds zero parameters: {s['non_affine_is_free']} "
+          f"{s['parameters_added_non_affine']}")
     print(f"parameter cost K-independent: {s['parameter_cost_independent_of_k']} "
           f"{s['parameters_added_on']}")
     print(f"crosscheck vs phase2/batch01: {crosscheck}")

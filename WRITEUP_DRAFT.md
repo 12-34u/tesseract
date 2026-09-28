@@ -20,6 +20,7 @@ in `configs/phase2/`; where this draft and those disagree, those win.
 | **Verified here** | Recomputed on this machine during this session. |
 | **From artifacts** | Read from committed artifacts under `runs/`. |
 | **From record** | Quoted from a committed report; the underlying artifacts are on the GPU box and were not re-read. |
+| **From record (GPU console log)** | Transcribed from console output, not from an artifact: no run id, manifest, commit or status field, and not re-readable. Must be confirmed against artifacts. |
 | **PLACEHOLDER** | No data available on this machine. Nothing is filled in. |
 
 ---
@@ -298,6 +299,7 @@ independent of K). Measured per-step z_L RMS, flag OFF vs ON:
 | K=2, ON | 1.00 | 1.00 | — | — | — | — | — | — | 1.00× |
 | K=4, ON | 1.00 | 1.00 | 1.00 | 1.00 | — | — | — | — | 1.00× |
 | K=8, ON | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00× |
+| K=8, ON, affine=False | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00× |
 
 **Answer: with the flag ON, RMS stays bounded across K.** The final-step z_L RMS
 varies by **0.00 %** across K ∈ {1, 2, 4, 8}, against **1669.68 %** with the flag
@@ -326,43 +328,89 @@ step is close to what LayerNorm does *by definition* at initialisation, where it
 gain is 1 and its bias 0. What the measurement shows is that the normalisation is
 placed where the growth happens — unlike the output-side norm, which left the
 identical 1.43 → 25.30 profile — not that the state stays bounded *after
-training*, when the learned gains are free to grow. Arm 2c must re-measure
-per-step norms at the end of training before Addendum 01 §A1.3's requirement can
-be recorded as satisfied.
+training*, when the learned gains are free to grow. As pre-registered, Arm 2c must
+re-measure per-step norms at the end of training before Addendum 01 §A1.3's
+requirement can be recorded as satisfied.
 
-Local suite: 756 passed, 1 skipped, including 10 new tests for this module.
+**A non-affine variant would make the bound structural.** With
+`elementwise_affine=False` there is no learnable gain to drift, so unit RMS holds
+throughout training rather than only at initialisation, and the fix adds **zero**
+parameters instead of 1024 (last row of the table above; measured identically).
+The two variants are numerically **identical** on an untrained model — maximum
+per-step z_L RMS difference 0.0, because gain is 1 and bias 0 at init — so no
+untrained measurement can choose between them; the case rests on what each permits
+during training, against the loss of a learned per-feature rescaling inside the
+recursion. Written up as a proposal in
+[PROPOSED_ADDENDUM_02_DRAFT.md](PROPOSED_ADDENDUM_02_DRAFT.md). **Not
+pre-registered, not in force, and awaiting a decision on the GPU box before Arm 2c
+runs.**
+
+Local suite: 756 passed, 1 skipped, including 14 tests for this module.
 
 ---
 
 ## 8. Batch 01 — PLACEHOLDER
 
-> **No Batch 01 arm has produced data reachable from this machine.** `runs/`
-> contains only the three Phase 1 directories; there is no
-> `runs/phase2/batch01/`. The arms are GPU-only by pre-registration
-> (Amendment 02a P1) and `scripts/phase2_batch01.py` exits 2 without CUDA.
+> **No Batch 01 artifact is reachable from this machine.** `runs/` contains only
+> the three Phase 1 directories; there is no `runs/phase2/batch01/`. The arms are
+> GPU-only by pre-registration (Amendment 02a P1) and `scripts/phase2_batch01.py`
+> exits 2 without CUDA.
 >
-> Fill each section from the GPU box's artifacts. Do not fill any of them from
-> this draft.
+> §8.1 is filled from the GPU session's **console output**, transcribed, and is
+> marked as such. Console output is weaker evidence than an artifact: it has no
+> run id, no manifest, no git commit and no status field, and it cannot be
+> re-read. Every figure in §8.1 must be confirmed against the artifacts before it
+> is treated as final. All other sections stay empty.
+>
+> Fill each remaining section from the GPU box's artifacts. Do not fill any of
+> them from this draft.
 
-### 8.1 Arm 1 — can the optimiser fit a fixed 512-example set? PLACEHOLDER
+### 8.1 Arm 1 — the optimiser can fit a fixed 512-example set
 
-> **Design only** ([PHASE2_BATCH_01_PREREG.md](PHASE2_BATCH_01_PREREG.md) §
-> fixed-set arm): 512 examples, justified as 512 × 17 = 8,704 target tokens. The
-> arm asks whether the optimiser can fit *anything* at this depth; a failure
-> means "cannot optimise at this depth" and stops the batch under the Stage 3
-> table.
->
-> **Needed:** per-seed best validation accuracy, each seed's own bar, final loss,
-> classification, and the K=8 result specifically.
->
-> **The lookup-table caveat must be stated wherever this result is reported.** A
-> fixed 512-example set is small enough that fitting it is consistent with
-> memorising it, so a success here is evidence about the *optimiser*, not about
-> depth. It is a necessary condition for the batch to continue, never evidence
-> for the architecture hypothesis. The benchmark design's coverage diagnostic —
-> the fraction of test windows whose exact pattern was seen in training, high at
-> T ≤ 2 and ≈ 0 at T ≥ 4 — is the quantity that bounds how much memorisation can
-> explain, and it should be reported alongside.
+**From record (GPU console log).** Transcribed from the GPU session's console
+output, not from artifacts: the `runs/phase2/batch01/` directory is not present on
+this machine, so none of this has been read back from a `run_metadata.json` or
+checked against a manifest. **Both rows must be confirmed against the artifacts on
+the GPU box before this section is treated as final.**
+
+Design ([PHASE2_BATCH_01_PREREG.md](PHASE2_BATCH_01_PREREG.md) §, fixed-set arm):
+512 examples, justified as 512 × 17 = 8,704 target tokens.
+
+| K | seed | fit exact match | token accuracy | loss | status |
+|---|---|---|---|---|---|
+| 1 | 0 | 100.00 % | 100.00 % | 0.0047 | **FITS** — final, 20,000 steps |
+| 8 | 0 | 100.00 % | — | — | **INTERIM** — reached at step 1,000 of 20,000; to be confirmed |
+
+**Arm 1 does not fail.** The optimiser fits the fixed set to 100 % exact match and
+100 % token accuracy at K=1, at a loss of 0.0047. So the Stage 3 row "Arm 1 fails
+→ stop, cannot optimise at this depth" is **not** the row the batch is in, and the
+batch is not blocked here. K=8 reached 100 % exact match by step 1,000, one
+twentieth of the budget — faster than K=1 needed, though with one seed and an
+unfinished run that ordering carries no weight yet.
+
+Caveats, in order of how much they constrain the claim:
+
+* **The lookup-table caveat, which must appear wherever this result is
+  reported.** A fixed 512-example set is small enough that fitting it is
+  consistent with memorising it. This is evidence about the **optimiser** — that
+  gradients at this depth are usable at all — and not about depth, composition or
+  generalisation. It is a necessary condition for the batch to continue, never
+  evidence for the architecture hypothesis. The benchmark design's coverage
+  diagnostic (the fraction of test windows whose exact pattern was seen in
+  training — high at T ≤ 2, ≈ 0 at T ≥ 4) is what bounds how much memorisation
+  explains, and should be reported alongside.
+* **Fit accuracy is not validation accuracy.** 100 % here is measured on the set
+  being fitted. Phase 1's Rule 90 cells also reached 90–99 % training exact match
+  while sitting at 0.0 % validation exact match (§2), so a fit number carries no
+  generalisation claim whatsoever.
+* **One seed.** The pre-registered classifications are defined over 3 seeds. A
+  single seed cannot produce a classification, and "FITS" above is a description
+  of that run, not a pre-registered verdict.
+* **K=8 is unfinished.** Marked INTERIM; a mid-run number can move.
+
+> **Still needed from the artifacts:** all three seeds at both K, each seed's own
+> above-chance bar, final loss at K=8, the completed K=8 run, and the coverage
+> diagnostic.
 
 ### 8.2 Arm 2b — output-side normalisation. PLACEHOLDER
 
@@ -375,6 +423,14 @@ Local suite: 756 passed, 1 skipped, including 10 new tests for this module.
 > The training arm. §7 establishes only the untrained structural property.
 > **Needed:** learnability outcome, plus per-step norms measured *after* training
 > to satisfy Addendum 01 §A1.3.
+>
+> **Open decision before this arm runs:** whether the normalisation is affine or
+> non-affine. [PROPOSED_ADDENDUM_02_DRAFT.md](PROPOSED_ADDENDUM_02_DRAFT.md)
+> argues for non-affine — the bound becomes structural rather than
+> initialisation-only, at zero parameters — and states the trade-off against it.
+> That proposal is not pre-registered and not in force; if it is rejected, this
+> arm runs affine as Addendum 01 specifies and owes the post-training
+> measurement above.
 
 ### 8.4 Arm 3 — curriculum over T. PLACEHOLDER
 
@@ -389,11 +445,17 @@ Local suite: 756 passed, 1 skipped, including 10 new tests for this module.
 
 ### 8.7 Stage 3 classification. PLACEHOLDER
 
-> The §10 table keys every row on an arm outcome, so with no arm data the batch
-> is **upstream of the table** — not in any row, and in particular not in "all
-> arms NOT LEARNABLE", which is a finding about measured arms rather than a
-> default for unmeasured ones. Apply it only once the artifacts are in hand, and
-> read the residual clause in its amended form (§6).
+> The §10 table keys every row on an arm outcome. One row can now be excluded:
+> **"Arm 1 fails → stop" does not apply**, since Arm 1 fits the fixed set (§8.1).
+> No row is *entered*, because every remaining row turns on a LEARNABLE or PARTIAL
+> classification at T=4, which is defined over 3 seeds and which no arm has yet
+> produced. In particular the batch is **not** in "all arms NOT LEARNABLE", which
+> is a finding about measured arms rather than a default for unmeasured ones.
+>
+> Apply the table only once the artifacts are in hand, and read the residual clause
+> in its amended form (§6): the fix recorded in Amendment 02 must bound
+> hidden-state growth, verified by per-step norms, which the output-side norm does
+> not.
 
 ---
 

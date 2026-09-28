@@ -50,11 +50,20 @@ class PerStepNormConfig:
     exist so that a follow-up can attribute any effect to one state or the
     other; the diagnostic itself leaves both on, because the confound is about
     the stream as a whole.
+
+    ``elementwise_affine`` is the consequential one. With it True, the
+    normalisation carries a learnable gain and bias, so the bound measured on an
+    untrained model is not guaranteed to survive training — the gain can grow.
+    With it False there is nothing to learn at the normalisation, so the bound
+    holds by construction at every step of training, and the parameter cost is
+    zero. The cost is expressiveness: the recursion loses any learned per-feature
+    rescaling at that point.
     """
 
     enabled: bool = False
     normalise_z_L: bool = True
     normalise_z_H: bool = True
+    elementwise_affine: bool = True
     eps: float = 1e-5
 
     def __post_init__(self) -> None:
@@ -69,9 +78,11 @@ def per_step_norm_parameter_cost(d_model: int, config: PerStepNormConfig) -> int
     """Parameters the flag adds: a weight and a bias per feature, per normalised state.
 
     The LayerNorms are shared across recursion steps, exactly as the block is,
-    so the cost does not depend on K.
+    so the cost does not depend on K. With ``elementwise_affine=False`` there is
+    no gain and no bias, so the cost is zero — and, because nothing at the
+    normalisation can be learned, the bound cannot drift during training.
     """
-    if not config.enabled:
+    if not config.enabled or not config.elementwise_affine:
         return 0
     states = int(config.normalise_z_L) + int(config.normalise_z_H)
     return states * 2 * d_model
@@ -102,9 +113,13 @@ class PerStepNormRecursion(nn.Module):
         self.d_model = reasoner.d_model
         self.num_recursive_steps = reasoner.num_recursive_steps
         self.alpha = reasoner.alpha
+        def norm() -> nn.LayerNorm:
+            return nn.LayerNorm(self.d_model, eps=config.eps,
+                                elementwise_affine=config.elementwise_affine)
+
         enabled = config.enabled
-        self.norm_L = nn.LayerNorm(self.d_model, eps=config.eps) if enabled and config.normalise_z_L else None
-        self.norm_H = nn.LayerNorm(self.d_model, eps=config.eps) if enabled and config.normalise_z_H else None
+        self.norm_L = norm() if enabled and config.normalise_z_L else None
+        self.norm_H = norm() if enabled and config.normalise_z_H else None
 
     @property
     def shared_block(self) -> nn.Module:
