@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api, API_BASE_URL } from '../services/api';
+import { subscribeToHash, viewFromHash } from '../navigation';
 import { fmtInt, fmtNum, verdictStatus } from '../format';
 import { Header } from '../components/Header';
 import { MetricCard } from '../components/MetricCard';
@@ -34,12 +35,9 @@ async function fetchAll() {
   return { data, errors };
 }
 
-const VIEWS = ['overview', 'crucible', 'k_scaling', 'cellular_automaton', 'phase2'];
-
 /** The selected view is kept in the URL hash so a view can be linked to directly. */
 function initialView() {
-  const hash = typeof window === 'undefined' ? '' : window.location.hash.replace('#', '');
-  return VIEWS.includes(hash) ? hash : 'overview';
+  return viewFromHash(typeof window === 'undefined' ? '' : window.location.hash);
 }
 
 export function Dashboard() {
@@ -68,6 +66,10 @@ export function Dashboard() {
   useEffect(() => {
     if (typeof window !== 'undefined') window.location.hash = selectedExperiment;
   }, [selectedExperiment]);
+
+  // Read the hash back when the browser changes it. Without this, Back and
+  // Forward move the URL while the page keeps showing the previous view.
+  useEffect(() => subscribeToHash(setSelectedExperiment), []);
 
   const { summary, crucible, kScaling, ca, raw, phase2 } = data;
   const counts = summary?.parameter_counts ?? [];
