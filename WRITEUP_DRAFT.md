@@ -356,37 +356,41 @@ Local suite: 756 passed, 1 skipped, including 14 tests for this module.
 > GPU-only by pre-registration (Amendment 02a P1) and `scripts/phase2_batch01.py`
 > exits 2 without CUDA.
 >
-> §8.1 is filled from the GPU session's **console output**, transcribed, and is
-> marked as such. Console output is weaker evidence than an artifact: it has no
-> run id, no manifest, no git commit and no status field, and it cannot be
-> re-read. Every figure in §8.1 must be confirmed against the artifacts before it
-> is treated as final. All other sections stay empty.
+> §8.1 has since been re-read from the GPU box's artifacts
+> (`runs/phase2/batch01/arm1_fixed_set/arm1_report.json`) and no longer depends
+> on transcribed console output. Its figures are final. All other sections stay
+> empty until they can be filled the same way.
 >
 > Fill each remaining section from the GPU box's artifacts. Do not fill any of
 > them from this draft.
 
 ### 8.1 Arm 1 — the optimiser can fit a fixed 512-example set
 
-**From record (GPU console log).** Transcribed from the GPU session's console
-output, not from artifacts: the `runs/phase2/batch01/` directory is not present on
-this machine, so none of this has been read back from a `run_metadata.json` or
-checked against a manifest. **Both rows must be confirmed against the artifacts on
-the GPU box before this section is treated as final.**
+**From artifacts.** Read back from
+`runs/phase2/batch01/arm1_fixed_set/arm1_report.json` on the GPU box, not
+transcribed from console output. There is exactly one Arm 1 run of record: an
+earlier attempt was interrupted by session teardown at step 10,000 of K=1 and
+wrote no artifact, so it left no competing result. The gate field in the
+artifact reads `gate_passed: true`.
 
-Design ([PHASE2_BATCH_01_PREREG.md](PHASE2_BATCH_01_PREREG.md) §, fixed-set arm):
-512 examples, justified as 512 × 17 = 8,704 target tokens.
+Design ([PHASE2_BATCH_01_PREREG.md](PHASE2_BATCH_01_PREREG.md) §4, fixed-set arm):
+512 examples, justified as 512 x 17 = 8,704 target tokens, about 0.19 % of the
+model's capacity at 32 bits per parameter.
 
-| K | seed | fit exact match | token accuracy | loss | status |
-|---|---|---|---|---|---|
-| 1 | 0 | 100.00 % | 100.00 % | 0.0047 | **FITS** — final, 20,000 steps |
-| 8 | 0 | 100.00 % | — | — | **INTERIM** — reached at step 1,000 of 20,000; to be confirmed |
+| K | seed | fit exact match | token accuracy | loss | steps | status |
+|---|---|---|---|---|---|---|
+| 1 | 0 | 100.00 % | 100.00 % | 0.004741 | 20,000 | **FITS** — final |
+| 8 | 0 | 100.00 % | 100.00 % | 0.006006 | 20,000 | **FITS** — final |
 
-**Arm 1 does not fail.** The optimiser fits the fixed set to 100 % exact match and
-100 % token accuracy at K=1, at a loss of 0.0047. So the Stage 3 row "Arm 1 fails
-→ stop, cannot optimise at this depth" is **not** the row the batch is in, and the
-batch is not blocked here. K=8 reached 100 % exact match by step 1,000, one
-twentieth of the budget — faster than K=1 needed, though with one seed and an
-unfinished run that ordering carries no weight yet.
+The two loss figures quoted in earlier progress notes, 0.0047 and 0.0060, are
+K=1 and K=8 of this single run, not two attempts at the same cell.
+
+**Arm 1 does not fail.** The optimiser fits the fixed set to 100.00 % exact
+match and 100.00 % token accuracy at both K, so the Stage 3 row "Arm 1 fails ->
+stop, cannot optimise at this depth" is **not** the row the batch is in. Both K
+values reached 99 % exact match by step 250, the first evaluation; K=8 fits as
+fast as K=1 despite starting 29.5 nats higher in loss, so the residual
+confound does not impede fitting.
 
 Caveats, in order of how much they constrain the claim:
 
@@ -406,11 +410,11 @@ Caveats, in order of how much they constrain the claim:
 * **One seed.** The pre-registered classifications are defined over 3 seeds. A
   single seed cannot produce a classification, and "FITS" above is a description
   of that run, not a pre-registered verdict.
-* **K=8 is unfinished.** Marked INTERIM; a mid-run number can move.
+* **One seed at each K**, as Arm 1 was pre-registered — it is a fit gate, not a
+  classified arm, so no above-chance bar applies to it.
 
-> **Still needed from the artifacts:** all three seeds at both K, each seed's own
-> above-chance bar, final loss at K=8, the completed K=8 run, and the coverage
-> diagnostic.
+> **Still needed from the artifacts:** the coverage diagnostic that bounds how
+> much of the fit memorisation explains.
 
 ### 8.2 Arm 2b — output-side normalisation. PLACEHOLDER
 
