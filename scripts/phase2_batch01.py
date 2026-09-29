@@ -268,11 +268,20 @@ def _training_arm(name, args, *, fix: bool, curriculum: bool, steps: int, schedu
             if boundaries:
                 entry["stage_boundaries"] = boundaries
                 entry["per_stage_diagnostics"] = _stage_diagnostics(model, benchmark, device, outcome, boundaries)
+            if fix == "per_step":
+                # Addendum 02: the bound must still hold after training, not only
+                # at initialisation. Recorded for the trained best checkpoint.
+                post = hidden_state_norms(model, val.inputs[:256], device)
+                entry["post_training_per_step_rms"] = post
+                entry["post_training_growth_ratio"] = post[-1]["z_L_rms"] / post[0]["z_L_rms"]
+                print(f"    post-training z_L RMS {post[0]['z_L_rms']:.4f} -> {post[-1]['z_L_rms']:.4f} "
+                      f"(growth {entry['post_training_growth_ratio']:.4f}x)")
             detail.append(entry)
             print(f"    best val token {record['best_val']['token_accuracy']:.4f}%  loss {record['best_val']['loss']:.4f}")
 
     by_k = {str(k): classify([r for r in records if r["k"] == k], prereg) for k in K_VALUES}
     report = {"arm": name, "question": question, "fix": fix, "curriculum": curriculum, "steps": steps,
+              "per_step_norm_elementwise_affine": False if fix == "per_step" else None,
               "schedule": schedule.__dict__ if schedule else None,
               "classification_by_k": by_k, "provenance": provenance, "detail": detail}
     write_json(run_dir / f"{name}_report.json", report)

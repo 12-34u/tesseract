@@ -327,3 +327,100 @@ def test_match_parameters_is_unchanged_when_no_normalisation_is_added(setup):
         target = 837_436
         assert match_parameters(cfg, layers, target) == \
             match_parameters(cfg, layers, target, normalisation_parameters_per_d_model=0)
+
+
+# ---------------------------------------------------------------------------
+# Addendum 02 — non-affine per-step normalisation, and arm isolation
+# ---------------------------------------------------------------------------
+
+
+def test_per_step_norm_is_non_affine_and_free(setup):
+    """Addendum 02: no learnable gain, and therefore no added parameters.
+
+    An affine gain is a free parameter: nothing in the objective stops it
+    growing with depth during training, which would undo the bound while the
+    fix was still nominally in place.
+    """
+    from phase2.batch01 import apply_per_step_norm, per_step_norm_parameter_cost
+
+    _, cfg, _ = setup
+    set_seed(0)
+    model = build_model("tesseract", 8, cfg, 17).model
+    before = count_parameters(model)["trainable"]
+    apply_per_step_norm(model)
+    after = count_parameters(model)["trainable"]
+
+    assert after == before, "non-affine normalisation must add no parameters"
+    assert per_step_norm_parameter_cost(cfg.d_model) == 0
+    assert model.reasoner.norm_L.weight is None and model.reasoner.norm_L.bias is None
+    assert model.reasoner.norm_H.weight is None and model.reasoner.norm_H.bias is None
+    assert model.reasoner.elementwise_affine is False
+
+
+def test_affine_variant_remains_available_and_costs_parameters(setup):
+    """Addendum 01's variant is not removed, only no longer the default."""
+    from phase2.batch01 import apply_per_step_norm, per_step_norm_parameter_cost
+
+    _, cfg, _ = setup
+    set_seed(0)
+    model = build_model("tesseract", 8, cfg, 17).model
+    before = count_parameters(model)["trainable"]
+    apply_per_step_norm(model, elementwise_affine=True)
+    after = count_parameters(model)["trainable"]
+    assert after - before == per_step_norm_parameter_cost(cfg.d_model, elementwise_affine=True) == 4 * cfg.d_model
+
+
+def test_non_affine_norm_still_bounds_the_stream(setup):
+    from phase2.batch01 import apply_per_step_norm
+
+    benchmark, cfg, val = setup
+    for k in (1, 2, 4, 8):
+        set_seed(0)
+        model = build_model("tesseract", k, cfg, benchmark.n).model
+        apply_per_step_norm(model)
+        rows = hidden_state_norms(model, val.inputs[:64], torch.device("cpu"))
+        assert rows[-1]["z_L_rms"] / rows[0]["z_L_rms"] < 1.05
+        assert rows[-1]["z_L_rms"] == pytest.approx(1.0, abs=1e-3)
+
+
+@pytest.mark.parametrize("arm", ["2b", "3", "4"])
+def test_arms_other_than_2c_are_unchanged_by_the_addendum_02_change(arm):
+    """The Addendum 02 change must reach Arm 2c and nothing else.
+
+    These are the resolved settings for the arms that were already running or
+    queued when the change landed, recorded byte-for-byte as they were before
+    it. A change that leaked into them would alter one of these values.
+    """
+    from phase2.batch01 import resolved_arm_config
+
+    expected = {
+        "2b": {"fix": "output", "curriculum": False, "steps": 20000, "seeds": 3, "fixed_set": None},
+        "3": {"fix": "none", "curriculum": True, "steps": 35000, "seeds": 3, "fixed_set": None},
+        "4": {"fix": "none", "curriculum": False, "steps": 40000, "seeds": 3, "fixed_set": None},
+    }[arm]
+    assert resolved_arm_config(arm) == expected
+    assert resolved_arm_config(arm)["fix"] != "per_step", "only Arm 2c may use per-step normalisation"
+
+
+def test_only_arm_2c_resolves_to_per_step_normalisation():
+    from phase2.batch01 import ARM_CONFIG
+
+    per_step = [arm for arm, cfg in ARM_CONFIG.items() if cfg["fix"] == "per_step"]
+    assert per_step == ["2c"]
+
+
+@pytest.mark.parametrize("arm", ["2b", "3", "4"])
+def test_arms_other_than_2c_build_models_with_no_added_parameters(setup, arm):
+    """The strongest isolation check: the models those arms build are untouched."""
+    from phase2.batch01 import apply_final_layer_norm, resolved_arm_config
+
+    _, cfg, _ = setup
+    fix = resolved_arm_config(arm)["fix"]
+    set_seed(0)
+    model = build_model("tesseract", 8, cfg, 17).model
+    baseline = count_parameters(model)["trainable"]
+    if fix == "output":
+        apply_final_layer_norm(model, VOCAB)
+        assert count_parameters(model)["trainable"] == baseline + 2 * cfg.d_model
+    else:
+        assert count_parameters(model)["trainable"] == baseline

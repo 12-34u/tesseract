@@ -293,14 +293,15 @@ class PerStepNormalisedReasoner(nn.Module):
     parameter count stays independent of K.
     """
 
-    def __init__(self, reasoner: nn.Module) -> None:
+    def __init__(self, reasoner: nn.Module, elementwise_affine: bool = False) -> None:
         super().__init__()
         self.inner = reasoner
         self.d_model = reasoner.d_model
         self.num_recursive_steps = reasoner.num_recursive_steps
         self.alpha = reasoner.alpha
-        self.norm_L = nn.LayerNorm(self.d_model)
-        self.norm_H = nn.LayerNorm(self.d_model)
+        self.elementwise_affine = elementwise_affine
+        self.norm_L = nn.LayerNorm(self.d_model, elementwise_affine=elementwise_affine)
+        self.norm_H = nn.LayerNorm(self.d_model, elementwise_affine=elementwise_affine)
 
     @property
     def shared_block(self) -> nn.Module:
@@ -330,14 +331,49 @@ class PerStepNormalisedReasoner(nn.Module):
         return z_L, history
 
 
-def per_step_norm_parameter_cost(d_model: int) -> int:
-    """Parameters per-step normalisation adds: two LayerNorms, shared across steps."""
-    return 2 * layer_norm_parameter_cost(d_model)
+def per_step_norm_parameter_cost(d_model: int, elementwise_affine: bool = False) -> int:
+    """Parameters per-step normalisation adds.
+
+    Zero when non-affine, which is what Addendum 02 adopts; two LayerNorms'
+    worth when affine, as Addendum 01 originally specified.
+    """
+    return 2 * layer_norm_parameter_cost(d_model) if elementwise_affine else 0
 
 
-def apply_per_step_norm(model: nn.Module) -> str:
-    """Replace the reasoner with the per-step-normalised one. Returns the path patched."""
+def apply_per_step_norm(model: nn.Module, elementwise_affine: bool = False) -> str:
+    """Replace the reasoner with the per-step-normalised one. Returns the path patched.
+
+    Non-affine by default (Addendum 02). An affine normalisation bounds the
+    state only at initialisation: its gain is a free parameter, and nothing in
+    the objective stops it growing with depth during training, which would undo
+    the bound while the fix is still nominally in place. Without a gain the
+    output has unit RMS by construction at every step of training.
+    """
     if not hasattr(model, "reasoner"):
         raise ValueError("model has no `reasoner` to normalise; per-step norm applies to the shared-block family")
-    model.reasoner = PerStepNormalisedReasoner(model.reasoner)
+    model.reasoner = PerStepNormalisedReasoner(model.reasoner, elementwise_affine=elementwise_affine)
     return "reasoner"
+
+
+
+# ---------------------------------------------------------------------------
+# Arm configuration, so isolation between arms can be asserted rather than hoped
+# ---------------------------------------------------------------------------
+
+#: What each Batch 01 arm resolves to. Kept as data so a change to one arm can
+#: be shown not to touch the others: `tests/phase2/test_batch01.py` compares
+#: this against committed expected values.
+ARM_CONFIG = {
+    "1": {"fix": "none", "curriculum": False, "steps": 20000, "seeds": 1, "fixed_set": 512},
+    "2b": {"fix": "output", "curriculum": False, "steps": 20000, "seeds": 3, "fixed_set": None},
+    "3": {"fix": "none", "curriculum": True, "steps": 35000, "seeds": 3, "fixed_set": None},
+    "4": {"fix": "none", "curriculum": False, "steps": 40000, "seeds": 3, "fixed_set": None},
+    "2c": {"fix": "per_step", "curriculum": False, "steps": 20000, "seeds": 3, "fixed_set": None},
+}
+
+
+def resolved_arm_config(arm: str) -> Dict:
+    """The resolved settings for one arm, as a plain comparable mapping."""
+    if arm not in ARM_CONFIG:
+        raise ValueError(f"unknown arm {arm!r}; known arms are {sorted(ARM_CONFIG)}")
+    return dict(ARM_CONFIG[arm])
