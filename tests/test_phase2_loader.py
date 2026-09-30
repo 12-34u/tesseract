@@ -691,6 +691,21 @@ def test_batch02_smoke_report_is_flagged_as_such(tmp_path):
         "batch": "02", "smoke": True, "target_t": 3, "config": {"steps": 40},
         "classification_by_k": {}, "detail": [],
     }), encoding="utf-8")
+    # A smoke DIRECTORY is not a source of results at all, which is the stronger
+    # guard: the runner names its smoke report differently too, but "_smoke"
+    # sorts after the real directory, so a newest-match rule needs this filter.
+    assert Phase2Loader(tmp_path).get_batch02()["status"] == "missing"
+
+
+def test_the_smoke_flag_is_surfaced_when_a_real_directory_carries_it(tmp_path):
+    """Defence in depth behind the directory filter: if a future change ever let
+    a smoke report be found, the flag must still mark it as not a result."""
+    run = tmp_path / "phase2" / "batch02" / "t3_curriculum"
+    run.mkdir(parents=True)
+    (run / "t3_curriculum_report.json").write_text(json.dumps({
+        "batch": "02", "smoke": True, "target_t": 3, "config": {"steps": 40},
+        "classification_by_k": {}, "detail": [],
+    }), encoding="utf-8")
     assert Phase2Loader(tmp_path).get_batch02()["smoke"] is True
 
 
@@ -708,3 +723,81 @@ def test_record_lists_missing_documents_rather_than_hiding_them(empty_runs):
 
 def test_status_includes_diagnostics(empty_runs):
     assert empty_runs.get_status()["diagnostics"]["status"] == "available"
+
+
+# ---------------------------------------------------------------------------
+# Batch 03 — the same probe with the residual fix on
+# ---------------------------------------------------------------------------
+
+
+def test_a_smoke_directory_never_supplies_a_batchs_gate(tmp_path):
+    """A smoke run writes `bounded_growth_gate.json` under the same name.
+
+    "_smoke" sorts after the real directory, so without the filter a newest-match
+    rule would show a 40-step smoke artifact as the batch's gate. The K list is
+    the tell: the smoke config uses two K values and the real one uses four.
+    """
+    batch = tmp_path / "phase2" / "batch03"
+    real, smoke = batch / "t3_k_sweep", batch / "t3_k_sweep_smoke"
+    real.mkdir(parents=True)
+    smoke.mkdir(parents=True)
+    for directory, ks in ((real, (1, 2, 4, 8)), (smoke, (1, 8))):
+        (directory / "bounded_growth_gate.json").write_text(json.dumps({
+            "gate_passed": True, "growth_limit": 1.05,
+            "rows": [{"k": k, "growth_ratio": 1.0, "bounded": True} for k in ks],
+        }), encoding="utf-8")
+
+    gate = Phase2Loader(tmp_path).get_batch03()["bounded_growth_gate"]
+    assert [row["k"] for row in gate["rows"]] == [1, 2, 4, 8]
+
+
+def test_each_batch_reports_the_residual_fix_it_ran_with(empty_runs):
+    """Batch 02's K comparison was withdrawn for running fix=none, so the view
+    must never show a K comparison without saying which fix was in force."""
+    assert empty_runs.get_batch02()["fix"] == "none"
+    assert empty_runs.get_batch03()["fix"] == "per_step"
+
+
+def test_batch03_is_pending_before_it_reports_but_still_carries_its_context(empty_runs):
+    batch03 = empty_runs.get_batch03()
+    assert batch03["status"] == "missing"
+    assert batch03["preregistration"] == "PHASE2_BATCH_03_PREREG.md"
+    assert batch03["t"] == 3
+    assert batch03["bounded_growth_gate"] is None
+
+
+def test_batch03_carries_the_per_cell_bound_that_gates_confound_conclusions(tmp_path):
+    run = tmp_path / "phase2" / "batch03" / "t3_k_sweep"
+    run.mkdir(parents=True)
+    (run / "t3_k_sweep_report.json").write_text(json.dumps({
+        "batch": "03", "smoke": False, "target_t": 3, "config": {"steps": 35000},
+        "majority_class_percent_t3": 1.8066,
+        "classification_by_k": {"1": {"classification": "LEARNABLE", "n_seeds": 3, "per_seed": [],
+                                      "seeds_above_chance": [0], "seeds_meeting_learnable_bar": [0]}},
+        "amended_classification_by_k": {"1": {"classification_amended": "LEARNABLE", "changed": False,
+                                              "per_seed": [], "seeds_above_chance_amended": [0],
+                                              "seeds_meeting_learnable_bar_amended": [0],
+                                              "degenerate_seeds": []}},
+        "shortcut_attribution_by_k": {"1": {"attribution": "COMPOSITION", "per_seed": []}},
+        "learnable_k": [1],
+        "trend_reading": {"reading": "MONOTONE_DECLINE", "reason": "r", "threshold_between": [1, 2]},
+        "post_training_bound_held_by_k": {"1": True},
+        "preregistered_outcome": {"outcome": "NEGATIVE_K_RESULT_STANDS_WITH_CONFOUND_EXCLUDED"},
+        "detail": [{"k": 1, "seed": 0, "steps_run": 35000, "post_training_growth_ratio": 1.0,
+                    "post_training_bound_held": True, "stage_boundary_validation": []}],
+    }), encoding="utf-8")
+
+    batch03 = Phase2Loader(tmp_path).get_batch03()
+    assert batch03["status"] == "available"
+    assert batch03["trend"]["reading"] == "MONOTONE_DECLINE"
+    assert batch03["trend"]["tone"] == "warn"
+    assert batch03["trend"]["threshold_between"] == [1, 2]
+    assert batch03["learnable_k"] == [1]
+    assert batch03["preregistered_outcome"]["outcome"].startswith("NEGATIVE_K_RESULT_STANDS")
+    cell = batch03["cells"][0]
+    assert cell["post_training_bound_held"] is True
+    assert cell["post_training_growth_ratio"] == 1.0
+
+
+def test_batch03_appears_in_the_diagnostics_payload(empty_runs):
+    assert "batch03" in empty_runs.get_diagnostics()

@@ -67,6 +67,7 @@ EXPERIMENT_DIR = "phase2/experiment"
 GATES_T3_DIR = "phase2/gates_t3"
 BATCH01_DIR = "phase2/batch01"
 BATCH02_DIR = "phase2/batch02"
+BATCH03_DIR = "phase2/batch03"
 
 #: The P1c probes, in the order the probe report defines them.
 PROBE_SOURCES = (
@@ -97,6 +98,12 @@ BATCH01_ARMS = (
 #: Batch 02 is a single probe rather than a chain of arms.
 BATCH02_PROBE = ("t3_curriculum", "T=3 probe", 3, "t3_curriculum*/t3_curriculum_report.json",
                  "Is T=3 learnable under the curriculum that solves T=1 and T=2?")
+
+#: Batch 03 is Batch 02 with the residual fix on across four K values. It reads
+#: through the same accessor, because the only structural difference is the extra
+#: bound and trend fields that `get_batch03` adds on top.
+BATCH03_PROBE = ("t3_k_sweep", "T=3 across K, fix on", 3, "t3_k_sweep*/t3_k_sweep_report.json",
+                 "With the residual stream bounded, is T=3 learnable at K > 1?")
 
 #: The pre-registration and correction record, in document order. Shown with
 #: checksums because the project's central claim is that these were committed
@@ -133,6 +140,18 @@ MISSING_BATCH02_MESSAGE = (
     "Batch 02's T=3 probe has not reported. It is pre-registered in PHASE2_BATCH_02_PREREG.md; "
     "run scripts/phase2_batch02_chain.sh."
 )
+MISSING_BATCH03_MESSAGE = (
+    "Batch 03's T=3 K sweep has not reported. It is pre-registered in PHASE2_BATCH_03_PREREG.md; "
+    "run scripts/phase2_batch03_chain.sh."
+)
+
+#: Tone per Batch 03 trend reading (PHASE2_BATCH_03_PREREG.md §7).
+TREND_TONE = {
+    "K_INDEPENDENT": "ok",
+    "MONOTONE_DECLINE": "warn",
+    "NON_MONOTONE": "note",
+    "BATCH_FAILURE": "fail",
+}
 
 PENDING_SENTINEL = "PENDING_P1B"
 
@@ -843,8 +862,22 @@ class Phase2Loader:
 
         A retried cell went to a sibling ``__attemptN`` directory, so the
         highest-sorting match is the one that produced the result.
+
+        Smoke directories are excluded. A smoke run exercises the same code path
+        at trivial step counts and writes some files under the same names — a
+        batch's ``bounded_growth_gate.json`` among them — and ``_smoke`` sorts
+        after the real directory, so without this filter the newest-match rule
+        would show a 40-step smoke artifact as the batch's result.
         """
-        matches = sorted(self.run_dir(root).glob(pattern))
+        base = self.run_dir(root)
+        matches = sorted(
+            p for p in base.glob(pattern)
+            # Matched against the path BELOW the run root, never the absolute
+            # path: the runs root itself may legitimately contain "_smoke"
+            # somewhere in its parents, and filtering on the absolute path would
+            # then silently exclude every real artifact.
+            if not any("_smoke" in part for part in p.relative_to(base).parts)
+        )
         return matches[-1] if matches else None
 
     @staticmethod
@@ -957,9 +990,59 @@ class Phase2Loader:
         }
 
     def get_batch02(self) -> Dict[str, Any]:
-        """Batch 02's T=3 probe. Pending until its report exists."""
-        key, label, t, pattern, question = BATCH02_PROBE
-        path = self._glob_report(BATCH02_DIR, pattern)
+        """Batch 02's T=3 probe, run with fix=none. Pending until its report exists."""
+        return self._probe_batch(BATCH02_PROBE, BATCH02_DIR, MISSING_BATCH02_MESSAGE,
+                                 "PHASE2_BATCH_02_PREREG.md", "PHASE2_BATCH_02_ADDENDUM_01.md",
+                                 fix="none")
+
+    def get_batch03(self) -> Dict[str, Any]:
+        """Batch 03's T=3 K sweep, run with the non-affine per-step fix on.
+
+        Adds the fields Batch 02 had no need of: the bounded-growth gate, the
+        per-cell post-training bound, the trend reading across K and the applied
+        pre-registered outcome. All four are read from the artifact, never
+        derived here — the trend and the outcome come from pre-registered pure
+        functions in `phase2.batch03` that the research code owns.
+        """
+        base = self._probe_batch(BATCH03_PROBE, BATCH03_DIR, MISSING_BATCH03_MESSAGE,
+                                 "PHASE2_BATCH_03_PREREG.md", None, fix="per_step")
+        gate_dir = self._glob_report(BATCH03_DIR, "t3_k_sweep*/bounded_growth_gate.json")
+        gate = read_json(gate_dir) if gate_dir else None
+        base["bounded_growth_gate"] = None if gate is None else {
+            "passed": gate.get("gate_passed"),
+            "growth_limit": gate.get("growth_limit"),
+            "rows": [{"k": r.get("k"), "growth_ratio": r.get("growth_ratio"), "bounded": r.get("bounded")}
+                     for r in (gate.get("rows") or [])],
+        }
+        if base["status"] != "available":
+            return base
+
+        path = self._glob_report(BATCH03_DIR, BATCH03_PROBE[3])
+        report = read_json(path) or {}
+        trend = report.get("trend_reading") or {}
+        base["learnable_k"] = report.get("learnable_k")
+        base["trend"] = {
+            "reading": trend.get("reading"),
+            "tone": TREND_TONE.get(trend.get("reading"), "idle"),
+            "reason": trend.get("reason"),
+            "threshold_between": trend.get("threshold_between"),
+        }
+        base["post_training_bound_held_by_k"] = report.get("post_training_bound_held_by_k")
+        base["preregistered_outcome"] = report.get("preregistered_outcome")
+        # The per-cell bound is what gates a confound conclusion, so it travels
+        # with each cell rather than only as a per-K summary.
+        by_cell = {(c.get("k"), c.get("seed")): c for c in (report.get("detail") or [])}
+        for cell in base["cells"]:
+            source = by_cell.get((cell["k"], cell["seed"]), {})
+            cell["post_training_growth_ratio"] = source.get("post_training_growth_ratio")
+            cell["post_training_bound_held"] = source.get("post_training_bound_held")
+        return base
+
+    def _probe_batch(self, probe, run_dir_name: str, missing_message: str,
+                     preregistration: str, addendum: Optional[str], fix: str) -> Dict[str, Any]:
+        """Shared shape for a single-probe batch (Batch 02, Batch 03)."""
+        key, label, t, pattern, question = probe
+        path = self._glob_report(run_dir_name, pattern)
         gates_t3 = read_json(self.run_dir(GATES_T3_DIR) / "gates_t3_report.json")
         shortcut = (gates_t3 or {}).get("shortcut_mechanism") or {}
         # G2 fails at T=3, so accuracy alone cannot separate depth-3 composition
@@ -975,19 +1058,23 @@ class Phase2Loader:
             "shortcut_agreement_iff_condition": shortcut.get("agreement_iff_condition"),
             "gates_t3_path": (_rel(self.run_dir(GATES_T3_DIR) / "gates_t3_report.json")
                               if gates_t3 is not None else None),
-            "preregistration": "PHASE2_BATCH_02_PREREG.md",
-            "addendum": "PHASE2_BATCH_02_ADDENDUM_01.md",
+            "preregistration": preregistration,
+            "addendum": addendum,
+            # The residual fix this batch ran with. Batch 02 ran fix=none, which
+            # is why its K comparison was withdrawn, so the view must never show
+            # a K comparison without saying which it was.
+            "fix": fix,
         }
         if path is None:
-            return {"status": "missing", "message": MISSING_BATCH02_MESSAGE,
-                    "run_dir": BATCH02_DIR, "id": key, "label": label, **context}
+            return {"status": "missing", "message": missing_message,
+                    "run_dir": run_dir_name, "id": key, "label": label, **context}
 
         report = read_json(path) or {}
         curves = read_json(Path(path).parent / "curve_analysis.json")
         detail = report.get("detail") or []
         return {
             "status": "available",
-            "run_dir": BATCH02_DIR, "id": key, "label": label, **context,
+            "run_dir": run_dir_name, "id": key, "label": label, **context,
             "report_path": _rel(path),
             "report_sha256": _sha256(Path(path)),
             "smoke": bool(report.get("smoke")),
@@ -1033,6 +1120,7 @@ class Phase2Loader:
             "probes": self.get_probes(),
             "batch01": self.get_batch01(),
             "batch02": self.get_batch02(),
+            "batch03": self.get_batch03(),
             "record": self.get_record(),
         }
 

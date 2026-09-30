@@ -36,6 +36,9 @@ import {
   arm5Summary,
   armRows,
   batch02State,
+  batch03State,
+  confoundReason,
+  kComparisonIsConfounded,
   cellRows,
   diagnosticsState,
   kComparison,
@@ -192,11 +195,76 @@ function ShortcutContext({ context, reported }) {
   );
 }
 
-function Batch02Body({ state }) {
+/**
+ * The reason Batch 02's K comparison cannot be read.
+ *
+ * Shown above the tables rather than below them: the residual confound grows
+ * with the number of block executions, so it sits on the very axis the K
+ * comparison varies, and a reader who sees the numbers first has already drawn
+ * the conclusion the erratum withdrew.
+ */
+function ConfoundNotice({ state }) {
+  if (!kComparisonIsConfounded(state)) return null;
+  const reason = confoundReason(state);
+  return (
+    <div className="rc-decision" style={{ marginBottom: '1.15rem' }}>
+      <strong style={{ color: 'var(--rc-text)' }}>
+        {reason === 'no_fix'
+          ? 'This batch ran with no residual fix, so its K comparison is confounded.'
+          : 'This batch does not record which residual fix it ran with, so its K comparison cannot be read.'}
+      </strong>
+      <br />
+      Without per-step normalisation the hidden state grows with the number of block executions — measured at
+      17.70&times; at K = 8 against ~1&times; at K = 1, with step-0 loss 33.97 nats against 4.43. That difference lies
+      on exactly the axis a K comparison varies, so a K = 8 failure here does not distinguish recursion depth from
+      the confound. Per-K classifications are unaffected; the comparison between them is.
+    </div>
+  );
+}
+
+/** The bounded-growth gate, which blocks every training cell on failure. */
+function BoundedGrowthGate({ gate }) {
+  if (!gate) return null;
+  return (
+    <>
+      <RuleHeading>Bounded-growth gate</RuleHeading>
+      <table className="rc-table">
+        <thead>
+          <tr>
+            <th style={{ width: '4rem' }}>K</th>
+            <th>Per-step hidden-state RMS growth</th>
+            <th style={{ width: '8rem' }}>Bounded</th>
+          </tr>
+        </thead>
+        <tbody>
+          {gate.rows.map((row) => (
+            <tr key={row.k}>
+              <td className="rc-mono">{row.k}</td>
+              <td className="rc-mono">
+                {Number.isFinite(row.growthRatio) ? `${row.growthRatio.toFixed(4)}\u00d7` : '—'}
+                {gate.growthLimit ? <span style={{ opacity: 0.55 }}> (limit {gate.growthLimit}&times;)</span> : null}
+              </td>
+              <td>
+                <State tone={row.bounded ? 'ok' : 'fail'}>{row.bounded ? 'yes' : 'NO'}</State>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="rc-prose" style={{ marginTop: '0.6rem' }}>
+        Run before any training cell and blocking all of them on failure. A null result at an unbounded K would be
+        uninterpretable in exactly the way Batch 02's was.
+      </p>
+    </>
+  );
+}
+
+function ProbeBatchBody({ state }) {
   const cells = cellRows(state);
   const comparison = kComparison(state);
   return (
     <>
+      <ConfoundNotice state={state} />
       <table className="rc-table">
         <thead>
           <tr>
@@ -238,6 +306,7 @@ function Batch02Body({ state }) {
             <th style={{ width: '9rem' }}>Past ceiling at</th>
             <th style={{ width: '8rem' }}>Slope /1k</th>
             <th style={{ width: '6rem' }}>Tokens</th>
+            {state.boundHeldByK ? <th style={{ width: '7rem' }}>Bound</th> : null}
           </tr>
         </thead>
         <tbody>
@@ -254,6 +323,19 @@ function Batch02Body({ state }) {
                 {cell.stillRising ? <> <Tag tone="note">rising</Tag></> : null}
               </td>
               <td className="rc-mono">{cell.distinctTokens ?? '—'}</td>
+              {state.boundHeldByK ? (
+                <td className="rc-mono">
+                  {cell.postTrainingBoundHeld == null ? (
+                    '—'
+                  ) : (
+                    <State tone={cell.postTrainingBoundHeld ? 'ok' : 'fail'}>
+                      {Number.isFinite(cell.postTrainingGrowthRatio)
+                        ? `${cell.postTrainingGrowthRatio.toFixed(4)}\u00d7`
+                        : (cell.postTrainingBoundHeld ? 'held' : 'BROKE')}
+                    </State>
+                  )}
+                </td>
+              ) : null}
             </tr>
           ))}
         </tbody>
@@ -410,6 +492,7 @@ export function DiagnosticsPanel({ status, showInternals = true }) {
   const arms = armRows(status);
   const arm5 = arm5Summary(status);
   const batch02 = batch02State(status);
+  const batch03 = batch03State(status);
 
   return (
     <Section
@@ -462,7 +545,7 @@ export function DiagnosticsPanel({ status, showInternals = true }) {
         style={{ marginTop: '1rem' }}
       >
         {batch02.available ? (
-          <Batch02Body state={batch02} />
+          <ProbeBatchBody state={batch02} />
         ) : (
           <PendingNote>{batch02.message}</PendingNote>
         )}
@@ -487,6 +570,58 @@ export function DiagnosticsPanel({ status, showInternals = true }) {
             />
           </div>
         )}
+      </Panel>
+
+      <Panel
+        title={`Batch 03 — T = ${batch03.context?.t ?? 3} across K, residual fix on`}
+        subtitle={batch03.context?.question}
+        aside={
+          batch03.available ? (
+            batch03.smoke ? <Tag tone="warn">smoke run</Tag> : <State tone="ok">reported</State>
+          ) : (
+            <State tone="active">running or not started</State>
+          )
+        }
+        style={{ marginTop: '1rem' }}
+      >
+        <p className="rc-prose" style={{ marginTop: 0 }}>
+          Batch 02's configuration with one change — Addendum 02's non-affine per-step normalisation on at every K —
+          and the K range widened to {'{1, 2, 4, 8}'}. It exists because Batch 02 ran with no fix, so its K
+          comparison could not distinguish recursion from the residual confound.
+        </p>
+        <BoundedGrowthGate gate={batch03.gate} />
+        {batch03.available ? (
+          <>
+            {batch03.trend?.reading && (
+              <div className="rc-decision" style={{ margin: '1.15rem 0' }}>
+                <strong style={{ color: 'var(--rc-text)' }}>
+                  Trend across K: <State tone={batch03.trend.tone}>{label(batch03.trend.reading)}</State>
+                </strong>
+                <br />
+                {batch03.trend.reason}
+                {batch03.trend.threshold_between ? (
+                  <>
+                    {' '}The threshold lies between K = {batch03.trend.threshold_between[0]} and K ={' '}
+                    {batch03.trend.threshold_between[1]}, and is not localised further by this batch.
+                  </>
+                ) : null}
+                {batch03.outcome?.outcome ? (
+                  <>
+                    <br />
+                    <span className="rc-mono" style={{ fontSize: '0.75rem' }}>
+                      Pre-registered outcome: {label(batch03.outcome.outcome)}
+                    </span>
+                    {batch03.outcome.reason ? <> — {batch03.outcome.reason}</> : null}
+                  </>
+                ) : null}
+              </div>
+            )}
+            <ProbeBatchBody state={batch03} />
+          </>
+        ) : (
+          <PendingNote>{batch03.message}</PendingNote>
+        )}
+        <ShortcutContext context={batch03.context} reported={batch03.available} />
       </Panel>
 
       <div style={{ marginTop: '1rem' }}>

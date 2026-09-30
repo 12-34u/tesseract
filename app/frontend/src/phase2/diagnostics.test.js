@@ -18,6 +18,9 @@ import {
   arm5Summary,
   armRows,
   batch02State,
+  batch03State,
+  confoundReason,
+  kComparisonIsConfounded,
   cellRows,
   diagnosticsState,
   kComparison,
@@ -75,6 +78,7 @@ const DIAGNOSTICS = {
   batch02: {
     status: 'missing',
     message: "Batch 02's T=3 probe has not reported.",
+    fix: 'none',
     t: 3,
     question: 'is T=3 learnable?',
     g1_passed: true,
@@ -308,5 +312,83 @@ describe('recordRows', () => {
     const missing = recordRows(STATUS).find((d) => d.name === 'MISSING.md');
     expect(missing.present).toBe(false);
     expect(missing.shortSha).toBeNull();
+  });
+});
+
+
+describe('batch03State and the confound flag', () => {
+  const BATCH03 = {
+    status: 'available',
+    t: 3,
+    question: 'q',
+    fix: 'per_step',
+    preregistration: 'PHASE2_BATCH_03_PREREG.md',
+    shortcut_candidate: 'window_product_forward',
+    bounded_growth_gate: {
+      passed: true,
+      growth_limit: 1.05,
+      rows: [1, 2, 4, 8].map((k) => ({ k, growth_ratio: 1.0, bounded: true })),
+    },
+    learnable_k: [1, 2],
+    trend: { reading: 'MONOTONE_DECLINE', tone: 'warn', reason: 'r', threshold_between: [2, 4] },
+    post_training_bound_held_by_k: { 1: true, 2: true, 4: true, 8: true },
+    preregistered_outcome: { outcome: 'NEGATIVE_K_RESULT_STANDS_WITH_CONFOUND_EXCLUDED', reason: 'x' },
+    by_k: [kRow(1, { classification: 'LEARNABLE', classification_amended: 'LEARNABLE', changed: false })],
+    cells: [{ k: 1, seed: 0, post_training_growth_ratio: 1.0, post_training_bound_held: true }],
+  };
+
+  it('marks a fix=none batch as confounded and a fix=per_step batch as not', () => {
+    // This is the flag the view uses to decide whether to show the notice, and
+    // Batch 02's withdrawn conclusion is why it exists.
+    expect(kComparisonIsConfounded(batch02State(STATUS))).toBe(true);
+    expect(kComparisonIsConfounded(batch03State({ diagnostics: { batch03: BATCH03 } }))).toBe(false);
+  });
+
+  it('treats an unrecorded fix as confounded, not as clean', () => {
+    // An absent measurement shows nothing; letting it read as controlled is the
+    // unsafe direction.
+    const noFixField = { ...BATCH03, fix: undefined };
+    const state = batch03State({ diagnostics: { batch03: noFixField } });
+    expect(kComparisonIsConfounded(state)).toBe(true);
+    expect(confoundReason(state)).toBe('unrecorded');
+    expect(confoundReason(batch02State(STATUS))).toBe('no_fix');
+    expect(confoundReason(batch03State({ diagnostics: { batch03: BATCH03 } }))).toBeNull();
+  });
+
+  it('carries the gate, trend, per-K bound and outcome through', () => {
+    const state = batch03State({ diagnostics: { batch03: BATCH03 } });
+    expect(state.available).toBe(true);
+    expect(state.gate.passed).toBe(true);
+    expect(state.gate.rows.map((r) => r.k)).toEqual([1, 2, 4, 8]);
+    expect(state.trend.reading).toBe('MONOTONE_DECLINE');
+    expect(state.trend.threshold_between).toEqual([2, 4]);
+    expect(state.learnableK).toEqual([1, 2]);
+    expect(state.outcome.outcome).toContain('NEGATIVE_K_RESULT_STANDS');
+  });
+
+  it('still returns the gate while the probe has not reported', () => {
+    // The gate runs before any training cell, so it exists before a result does.
+    const pending = { ...BATCH03, status: 'missing', message: 'not yet' };
+    const state = batch03State({ diagnostics: { batch03: pending } });
+    expect(state.available).toBe(false);
+    expect(state.gate.passed).toBe(true);
+    expect(state.context.fix).toBe('per_step');
+  });
+
+  it('maps the per-cell bound onto the cell rows', () => {
+    const state = batch03State({ diagnostics: { batch03: BATCH03 } });
+    const [cell] = cellRows(state);
+    expect(cell.postTrainingBoundHeld).toBe(true);
+    expect(cell.postTrainingGrowthRatio).toBe(1.0);
+  });
+
+  it('leaves the bound fields null for a batch that records none', () => {
+    const [cell] = cellRows({ cells: [{ k: 1, seed: 0 }], curves: null });
+    expect(cell.postTrainingBoundHeld).toBeNull();
+    expect(cell.postTrainingGrowthRatio).toBeNull();
+  });
+
+  it('returns unavailable without a payload', () => {
+    expect(batch03State({}).available).toBe(false);
   });
 });

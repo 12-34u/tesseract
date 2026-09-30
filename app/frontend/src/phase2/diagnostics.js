@@ -113,8 +113,54 @@ export function arm5Summary(status) {
  * should still see why a T=3 accuracy will need an attribution.
  */
 export function batch02State(status) {
-  const block = status?.diagnostics?.batch02;
-  if (!block) return { available: false, message: 'No Batch 02 payload.' };
+  return probeBatchState(status?.diagnostics?.batch02, 'No Batch 02 payload.');
+}
+
+/**
+ * Batch 03: Batch 02's probe with the residual fix on, across four K values.
+ *
+ * Adds the bounded-growth gate, the per-K post-training bound, the trend reading
+ * and the applied pre-registered outcome. None of those is computed here — the
+ * trend and the outcome come from pre-registered pure functions in
+ * `phase2.batch03` that the research code owns, and the view only renders them.
+ *
+ * The gate is returned even when the probe has not reported, because it runs
+ * before any training cell and a reader should be able to see it passed.
+ */
+export function batch03State(status) {
+  const block = status?.diagnostics?.batch03;
+  const base = probeBatchState(block, 'No Batch 03 payload.');
+  if (!block) return base;
+  const gate = block.bounded_growth_gate;
+  return {
+    ...base,
+    gate: gate
+      ? {
+          passed: gate.passed,
+          growthLimit: gate.growth_limit,
+          rows: (gate.rows || []).map((row) => ({
+            k: row.k,
+            growthRatio: row.growth_ratio,
+            bounded: row.bounded,
+          })),
+        }
+      : null,
+    learnableK: block.learnable_k ?? null,
+    trend: block.trend ?? null,
+    boundHeldByK: block.post_training_bound_held_by_k ?? null,
+    outcome: block.preregistered_outcome ?? null,
+  };
+}
+
+/**
+ * Shared shape for a single-probe batch.
+ *
+ * `fix` is carried whether or not the probe reported, and the view is required
+ * to show it beside any K comparison: Batch 02's K conclusion was withdrawn
+ * precisely because it ran `fix=none` and the report did not say so.
+ */
+function probeBatchState(block, absentMessage) {
+  if (!block) return { available: false, message: absentMessage };
   const context = {
     t: block.t,
     question: block.question,
@@ -128,6 +174,7 @@ export function batch02State(status) {
     learnableBar: LEARNABLE_BAR_PERCENT,
     preregistration: block.preregistration,
     addendum: block.addendum,
+    fix: block.fix ?? null,
   };
   if (block.status !== 'available') {
     return { available: false, message: block.message, context, smoke: false };
@@ -142,6 +189,28 @@ export function batch02State(status) {
     cells: block.cells || [],
     curves: block.curve_analysis || null,
   };
+}
+
+/** Residual fixes that actually bound the stream. The output-side LayerNorm
+ *  does not: Batch 01 §3 measured 17.70x growth at K=8 with it in place. */
+const BOUNDING_FIXES = new Set(['per_step']);
+
+/**
+ * Whether a batch's K comparison is confounded by the residual stream.
+ *
+ * An absent `fix` counts as confounded, not as clean. The project's rule is that
+ * an absent measurement shows nothing, and here the unsafe direction is to let a
+ * batch that never recorded its fix read as controlled.
+ */
+export function kComparisonIsConfounded(state) {
+  return !BOUNDING_FIXES.has(state?.context?.fix);
+}
+
+/** Why a K comparison is confounded, so the notice never asserts more than it knows. */
+export function confoundReason(state) {
+  const fix = state?.context?.fix;
+  if (BOUNDING_FIXES.has(fix)) return null;
+  return fix === 'none' ? 'no_fix' : 'unrecorded';
 }
 
 /**
@@ -192,6 +261,10 @@ export function cellRows(state) {
       crossedCeilingAt: curve.crossed_shortcut_ceiling?.step ?? null,
       finalSlope: curve.final_slope?.slope_points_per_1000_steps ?? null,
       stillRising: curve.still_rising ?? null,
+      // Batch 03 only. The bound is what gates a confound conclusion for that
+      // cell, so it belongs on the cell and not only in a per-K summary.
+      postTrainingGrowthRatio: cell.post_training_growth_ratio ?? null,
+      postTrainingBoundHeld: cell.post_training_bound_held ?? null,
     };
   });
 }
