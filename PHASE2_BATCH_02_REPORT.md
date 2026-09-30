@@ -4,6 +4,14 @@
 steps. Runtime 2 h 40 min 40 s against the pre-registered estimate of
 ≈ 2 h 45 min (2.72 GPU-h); actual **2.68 GPU-h**.
 
+> **§8's K comparison is corrected by
+> [PHASE2_BATCH_02_REPORT_ERRATUM_01.md](PHASE2_BATCH_02_REPORT_ERRATUM_01.md)
+> (2026-09-30): this batch ran `fix=none`, so the residual confound was
+> uncontrolled on the K axis and the sign of the K effect is unknown, not
+> negative.** Nothing below is edited and no number or classification changes;
+> §4 of that erratum lists which sections are unaffected. This notice is the only
+> line added after the report was committed.
+
 Report: `runs/phase2/batch02/t3_curriculum/t3_curriculum_report.json`.
 Curve analysis: `runs/phase2/batch02/t3_curriculum/curve_analysis.json`.
 Pre-registered in [PHASE2_BATCH_02_PREREG.md](PHASE2_BATCH_02_PREREG.md),
