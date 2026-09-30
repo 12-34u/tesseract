@@ -99,6 +99,12 @@ def _fmt(value, spec=".4f", missing="—"):
     return format(value, spec) if isinstance(value, (int, float)) and np.isfinite(value) else missing
 
 
+def _max(values):
+    """Largest finite value, or None."""
+    usable = [v for v in values if isinstance(v, (int, float)) and np.isfinite(v)]
+    return float(max(usable)) if usable else None
+
+
 def _mean(values):
     """Mean of the finite values, or None. np.mean of an empty list is nan, and
     a nan in a report reads like a measurement."""
@@ -134,6 +140,12 @@ def analyse(report: dict, window: int, rising_threshold: float) -> dict:
             "cells_crossing_learnable_bar": sum(1 for c in cells if c["crossed_learnable_bar"]),
             "cells_crossing_shortcut_ceiling": len(crossed),
             "mean_best_accuracy": _mean([c["best_val_token_accuracy"] for c in cells]),
+            # Added after Batch 03's K=2 cells came in at 1.81 / 99.41 / 1.81:
+            # with bimodal cells a mean describes neither mode, and reporting
+            # only the mean would understate what the K value can do. This is a
+            # descriptive statistic over recorded curves and changes no
+            # pre-registered rule; the classification is untouched.
+            "max_best_accuracy": _max([c["best_val_token_accuracy"] for c in cells]),
             "mean_takeoff_step_shortcut_ceiling": _mean([c["crossed_shortcut_ceiling"]["step"] for c in crossed]),
             "mean_final_slope_points_per_1000_steps": _mean(
                 [c["final_slope"]["slope_points_per_1000_steps"] for c in cells if c["final_slope"]]),
@@ -198,7 +210,7 @@ def main() -> int:
     print()
     for k, agg in result["by_k"].items():
         takeoff = agg["mean_takeoff_step_shortcut_ceiling"]
-        print(f"  K={k}: mean best {_fmt(agg['mean_best_accuracy'])} %  "
+        print(f"  K={k}: best {_fmt(agg['max_best_accuracy'])} %  mean {_fmt(agg['mean_best_accuracy'])} %  "
               f"crossed bar {agg['cells_crossing_learnable_bar']}/{agg['cells']}  "
               f"crossed ceiling {agg['cells_crossing_shortcut_ceiling']}/{agg['cells']}  "
               f"mean takeoff {_fmt(takeoff, '.0f')}  "
