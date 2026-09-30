@@ -126,6 +126,7 @@ RECORD_DOCUMENTS = (
     ("PHASE2_BATCH_03_REPORT.md", "Batch 03 report — K>=4 solves T=3 exactly with the fix on", "report"),
     ("PHASE2_BATCH_03_REPORT_NOTE_01.md", "Batch 03 report Note 01 — exact match is the informative metric", "note"),
     ("PHASE2_BATCH_04_PREREG.md", "Batch 04 pre-registration — T=4 with the fix and full curriculum", "prereg"),
+    ("PHASE2_BATCH_05_DRAFT.md", "Batch 05 draft — compute-matched depth test (NOT pre-registered)", "draft"),
     ("PHASE1_FREEZE_ERRATUM.md", "Phase 1 freeze erratum", "erratum"),
 )
 
