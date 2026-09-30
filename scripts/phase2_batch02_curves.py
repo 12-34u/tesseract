@@ -84,6 +84,18 @@ def final_slope(curve, window: int):
 SHORTCUT_CEILING_PERCENT = 26.6257
 
 
+def _fmt(value, spec=".4f", missing="—"):
+    """Format a number, or the missing marker. Never a zero standing in for absent."""
+    return format(value, spec) if isinstance(value, (int, float)) and np.isfinite(value) else missing
+
+
+def _mean(values):
+    """Mean of the finite values, or None. np.mean of an empty list is nan, and
+    a nan in a report reads like a measurement."""
+    usable = [v for v in values if isinstance(v, (int, float)) and np.isfinite(v)]
+    return float(np.mean(usable)) if usable else None
+
+
 def analyse(report: dict, window: int, rising_threshold: float) -> dict:
     ceiling = SHORTCUT_CEILING_PERCENT
     rows = []
@@ -111,11 +123,10 @@ def analyse(report: dict, window: int, rising_threshold: float) -> dict:
             "cells": len(cells),
             "cells_crossing_learnable_bar": sum(1 for c in cells if c["crossed_learnable_bar"]),
             "cells_crossing_shortcut_ceiling": len(crossed),
-            "mean_best_accuracy": float(np.mean([c["best_val_token_accuracy"] for c in cells])),
-            "mean_takeoff_step_shortcut_ceiling": (float(np.mean([c["crossed_shortcut_ceiling"]["step"]
-                                                                  for c in crossed])) if crossed else None),
-            "mean_final_slope_points_per_1000_steps": float(np.mean(
-                [c["final_slope"]["slope_points_per_1000_steps"] for c in cells if c["final_slope"]])),
+            "mean_best_accuracy": _mean([c["best_val_token_accuracy"] for c in cells]),
+            "mean_takeoff_step_shortcut_ceiling": _mean([c["crossed_shortcut_ceiling"]["step"] for c in crossed]),
+            "mean_final_slope_points_per_1000_steps": _mean(
+                [c["final_slope"]["slope_points_per_1000_steps"] for c in cells if c["final_slope"]]),
             "cells_still_rising": sum(1 for c in cells if c["still_rising"]),
         }
 
@@ -163,10 +174,10 @@ def main() -> int:
         bar = r["crossed_learnable_bar"]
         ceil = r["crossed_shortcut_ceiling"]
         slope = r["final_slope"]
-        slope_text = f"{slope['slope_points_per_1000_steps']:+.3f}" if slope else "n/a"
-        print(f"{r['k']:>3} {r['seed']:>4} {r['best_val_token_accuracy']:>8.4f} "
-              f"{r['final_val_token_accuracy']:>8.4f} "
-              f"{(r['shortcut_agreement_percent'] or 0):>6.2f} "
+        slope_text = _fmt((slope or {}).get("slope_points_per_1000_steps"), "+.3f", "n/a")
+        print(f"{r['k']:>3} {r['seed']:>4} {_fmt(r['best_val_token_accuracy']):>8} "
+              f"{_fmt(r['final_val_token_accuracy']):>8} "
+              f"{_fmt(r['shortcut_agreement_percent'], '.2f'):>6} "
               f"{(str(bar['step']) if bar else 'never'):>10} "
               f"{(str(ceil['step']) if ceil else 'never'):>11} "
               f"{slope_text:>9} "
@@ -174,11 +185,11 @@ def main() -> int:
     print()
     for k, agg in result["by_k"].items():
         takeoff = agg["mean_takeoff_step_shortcut_ceiling"]
-        print(f"  K={k}: mean best {agg['mean_best_accuracy']:.4f} %  "
+        print(f"  K={k}: mean best {_fmt(agg['mean_best_accuracy'])} %  "
               f"crossed bar {agg['cells_crossing_learnable_bar']}/{agg['cells']}  "
               f"crossed ceiling {agg['cells_crossing_shortcut_ceiling']}/{agg['cells']}  "
-              f"mean takeoff {('%.0f' % takeoff) if takeoff else '—'}  "
-              f"mean slope {agg['mean_final_slope_points_per_1000_steps']:+.3f}/1k  "
+              f"mean takeoff {_fmt(takeoff, '.0f')}  "
+              f"mean slope {_fmt(agg['mean_final_slope_points_per_1000_steps'], '+.3f')}/1k  "
               f"still rising {agg['cells_still_rising']}/{agg['cells']}")
 
     out = Path(args.output) if args.output else Path(path).parent / "curve_analysis.json"
