@@ -122,6 +122,8 @@ RECORD_DOCUMENTS = (
     ("PHASE2_BATCH_02_REPORT.md", "Batch 02 report — T=3 learnable at K=1, not at K=8", "report"),
     ("PHASE2_BATCH_02_REPORT_ERRATUM_01.md", "Batch 02 report Erratum 01 — the K comparison is confounded", "erratum"),
     ("PHASE2_BATCH_03_PREREG.md", "Batch 03 pre-registration — T=3 across K with the fix on", "prereg"),
+    ("PHASE2_BATCH_03_ADDENDUM_01.md", "Batch 03 Addendum 01 — reboot, resume and salvage provenance", "addendum"),
+    ("PHASE2_BATCH_03_REPORT.md", "Batch 03 report — K>=4 solves T=3 exactly with the fix on", "report"),
     ("PHASE1_FREEZE_ERRATUM.md", "Phase 1 freeze erratum", "erratum"),
 )
 
