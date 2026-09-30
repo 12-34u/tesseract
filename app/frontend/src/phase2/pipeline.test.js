@@ -236,10 +236,49 @@ describe('metadata chips', () => {
 });
 
 describe('pipeline stages', () => {
-  it('produces the seven research stages in order', () => {
+  it('produces the eight research stages in order', () => {
     const stages = pipelineStages(STATUS);
-    expect(stages.map((s) => s.index)).toEqual(['01', '02', '03', '04', '05', '06', '07']);
-    expect(stages.map((s) => s.id)).toEqual(['benchmark', 'gates', 'capacity', 'width', 'budget', 'matrix', 'analysis']);
+    expect(stages.map((s) => s.index)).toEqual(['01', '02', '03', '04', '05', '06', '07', '08']);
+    expect(stages.map((s) => s.id)).toEqual(
+      ['benchmark', 'gates', 'capacity', 'width', 'budget', 'probes', 'matrix', 'analysis'],
+    );
+  });
+
+  it('marks the probes stage as waiting when no diagnostics payload exists', () => {
+    const stage = pipelineStages(STATUS).find((s) => s.id === 'probes');
+    expect(stage.state).toBe(STAGE_WAITING);
+  });
+
+  it('flags a completed batch in which no arm moved, rather than calling it done', () => {
+    const diagnostics = {
+      status: 'available',
+      batch01: { classified_arms: 4, arms_that_moved: 0 },
+      batch02: { status: 'available' },
+    };
+    const stage = pipelineStages({ ...STATUS, diagnostics }).find((s) => s.id === 'probes');
+    expect(stage.state).toBe(STAGE_ATTENTION);
+    expect(stage.summary).toContain('0 moved');
+  });
+
+  it('stays active while Batch 02 has not reported', () => {
+    const diagnostics = {
+      status: 'available',
+      batch01: { classified_arms: 4, arms_that_moved: 0 },
+      batch02: { status: 'missing' },
+    };
+    const stage = pipelineStages({ ...STATUS, diagnostics }).find((s) => s.id === 'probes');
+    expect(stage.state).toBe(STAGE_ACTIVE);
+    expect(stage.summary).toContain('has not reported');
+  });
+
+  it('does not treat a smoke run as a Batch 02 report', () => {
+    const diagnostics = {
+      status: 'available',
+      batch01: { classified_arms: 4, arms_that_moved: 0 },
+      batch02: { status: 'available', smoke: true },
+    };
+    const stage = pipelineStages({ ...STATUS, diagnostics }).find((s) => s.id === 'probes');
+    expect(stage.state).toBe(STAGE_ACTIVE);
   });
 
   it('treats a documented G2 diagnostic exception as done, not as a failure', () => {
@@ -512,9 +551,9 @@ describe('run progress', () => {
 
   it('counts completed stages against the pipeline length', () => {
     const progress = runProgress(STATUS);
-    expect(progress.stagesTotal).toBe(7);
+    expect(progress.stagesTotal).toBe(8);
     expect(progress.stagesDone).toBeGreaterThan(0);
-    expect(progress.stageFraction).toBeCloseTo(progress.stagesDone / 7);
+    expect(progress.stageFraction).toBeCloseTo(progress.stagesDone / 8);
   });
 
   it('never reports progress beyond what was recorded', () => {
@@ -600,9 +639,9 @@ describe('experimental contract', () => {
 });
 
 describe('sections and presentation mode', () => {
-  it('lists the six research sections in reading order', () => {
+  it('lists the seven research sections in reading order', () => {
     expect(SECTIONS.map((s) => s.id)).toEqual(
-      ['overview', 'methodology', 'diagnostics', 'experiments', 'results', 'analysis'],
+      ['overview', 'methodology', 'diagnostics', 'experiments', 'probes', 'results', 'analysis'],
     );
   });
 
@@ -613,6 +652,10 @@ describe('sections and presentation mode', () => {
     expect(on.showSourcePaths).toBe(false);
     const off = presentationFilter(false);
     expect(Object.values(off).every(Boolean)).toBe(true);
+  });
+
+  it('keeps the probes section in presentation mode, since it is the only result there is', () => {
+    expect(PRESENTATION_SECTIONS.has('probes')).toBe(true);
   });
 
   it('drops only the diagnostics section from the presentation running order', () => {

@@ -64,6 +64,72 @@ GATES_AMENDED_DIR = "phase2/gates_amendment01"
 P1B_DIR = "phase2/p1b_capacity_diagnostic"
 P1B2_DIR = "phase2/p1b2_capacity_diagnostic"
 EXPERIMENT_DIR = "phase2/experiment"
+GATES_T3_DIR = "phase2/gates_t3"
+BATCH01_DIR = "phase2/batch01"
+BATCH02_DIR = "phase2/batch02"
+
+#: The P1c probes, in the order the probe report defines them.
+PROBE_SOURCES = (
+    ("probe_a", "Probe A", 4, "phase2/probe_a/probe_report.json", "Cold start at the first primary depth."),
+    ("probe_b", "Probe B", 8, "phase2/probe_b/probe_report.json",
+     "Warm-started from a T=1 solution at the same K, so only T changes."),
+)
+
+#: Batch 01's arms. Each changed exactly one thing against a common reference,
+#: which is why the lever is carried alongside the classification: an arm's
+#: result is only interpretable as being about that lever.
+BATCH01_ARMS = (
+    ("arm1", "Arm 1", "Fixed-set fit (gate)", "arm1_fixed_set*/arm1_report.json",
+     "Can the optimiser fit at this depth at all?"),
+    ("arm2a", "Arm 2a", "Step-0 loss and residual norms", "arm2a_step0*/arm2a_report.json",
+     "How large is the residual-stream confound?"),
+    ("arm2b", "Arm 2b", "Output-side LayerNorm", "arm2b_residual_fix*/arm2b_residual_fix_report.json",
+     "Does read-out normalisation change learnability?"),
+    ("arm3", "Arm 3", "Curriculum over T", "arm3_curriculum*/arm3_curriculum_report.json",
+     "Is a cold-start gradient the blocker?"),
+    ("arm4", "Arm 4", "Warmup + 2x budget", "arm4_warmup*/arm4_warmup_report.json",
+     "Is the plateau an optimisation artefact?"),
+    ("arm2c", "Arm 2c", "Non-affine per-step norm",
+     "arm2c_per_step_norm_train*/arm2c_per_step_norm_train_report.json",
+     "Does bounding hidden-state growth change learnability?"),
+)
+
+#: Batch 02 is a single probe rather than a chain of arms.
+BATCH02_PROBE = ("t3_curriculum", "T=3 probe", 3, "t3_curriculum*/t3_curriculum_report.json",
+                 "Is T=3 learnable under the curriculum that solves T=1 and T=2?")
+
+#: The pre-registration and correction record, in document order. Shown with
+#: checksums because the project's central claim is that these were committed
+#: before the results they govern, and a reader has to be able to check that.
+RECORD_DOCUMENTS = (
+    ("PHASE2_PROBE_PREREGISTRATION.md", "P1c probe pre-registration", "prereg"),
+    ("PHASE2_PROBE_REPORT.md", "P1c probe report", "report"),
+    ("PHASE2_BATCH_01_PREREG.md", "Batch 01 pre-registration (+ Addendum 01)", "prereg"),
+    ("PHASE2_BATCH_01_ADDENDUM_02.md", "Batch 01 Addendum 02 — non-affine per-step norm", "addendum"),
+    ("PHASE2_BATCH_01_ARM5_CRITERIA.md", "Batch 01 Arm 5 approval criteria", "prereg"),
+    ("PHASE2_BATCH_01_ADDENDUM_03.md", "Batch 01 Addendum 03 — majority floor, collapse check", "addendum"),
+    ("PHASE2_BATCH_01_REPORT.md", "Batch 01 report", "report"),
+    ("PHASE2_BATCH_01_REPORT_ERRATUM_01.md", "Batch 01 report Erratum 01", "erratum"),
+    ("PHASE2_BATCH_02_PREREG.md", "Batch 02 pre-registration — the T=3 probe", "prereg"),
+    ("PHASE2_BATCH_02_ADDENDUM_01.md", "Batch 02 Addendum 01 — per-K combination rule", "addendum"),
+    ("PHASE1_FREEZE_ERRATUM.md", "Phase 1 freeze erratum", "erratum"),
+)
+
+#: Tone per classification, so the view never has to decide what a verdict means.
+CLASSIFICATION_TONE = {
+    "LEARNABLE": "ok",
+    "PARTIAL": "warn",
+    "NOT_LEARNABLE": "idle",
+    "DEGENERATE": "fail",
+}
+
+#: Tone per shortcut attribution (PHASE2_BATCH_02_PREREG.md §5).
+ATTRIBUTION_TONE = {"COMPOSITION": "ok", "UNRESOLVED": "warn", "SHORTCUT": "fail"}
+
+MISSING_BATCH02_MESSAGE = (
+    "Batch 02's T=3 probe has not reported. It is pre-registered in PHASE2_BATCH_02_PREREG.md; "
+    "run scripts/phase2_batch02_chain.sh."
+)
 
 PENDING_SENTINEL = "PENDING_P1B"
 
@@ -766,6 +832,207 @@ class Phase2Loader:
             "run": read_json(self.run_dir(EXPERIMENT_DIR) / "analysis" / "run_metadata.json"),
         }
 
+
+    # -- probes and diagnostic batches ------------------------------------------
+
+    def _glob_report(self, root: str, pattern: str) -> Optional[Path]:
+        """Newest matching report under a run directory, or None.
+
+        A retried cell went to a sibling ``__attemptN`` directory, so the
+        highest-sorting match is the one that produced the result.
+        """
+        matches = sorted(self.run_dir(root).glob(pattern))
+        return matches[-1] if matches else None
+
+    @staticmethod
+    def _per_k_rows(by_k: Mapping, amended_by_k: Optional[Mapping] = None,
+                    attribution_by_k: Optional[Mapping] = None) -> List[Dict[str, Any]]:
+        """One row per K, carrying the original and amended verdicts side by side.
+
+        Neither replaces the other. Addendum 03 is explicit that both are
+        reported for every source, because the amendment changes how a recorded
+        result is read and not what any arm trained.
+        """
+        rows = []
+        for key in sorted(by_k, key=lambda k: int(k)):
+            original = by_k[key] or {}
+            amended = ((amended_by_k or {}).get(key)) or {}
+            attribution = ((attribution_by_k or {}).get(key)) or {}
+            amended_class = amended.get("classification_amended")
+            rows.append({
+                "k": int(key),
+                "classification": original.get("classification"),
+                "classification_tone": CLASSIFICATION_TONE.get(original.get("classification"), "idle"),
+                "classification_amended": amended_class,
+                "classification_amended_tone": CLASSIFICATION_TONE.get(amended_class, "idle"),
+                "changed": amended.get("changed"),
+                "seeds_above_chance": original.get("seeds_above_chance") or [],
+                "seeds_above_chance_amended": amended.get("seeds_above_chance_amended"),
+                "seeds_meeting_learnable_bar": original.get("seeds_meeting_learnable_bar") or [],
+                "degenerate_seeds": amended.get("degenerate_seeds"),
+                "n_seeds": original.get("n_seeds"),
+                "attribution": attribution.get("attribution"),
+                "attribution_tone": ATTRIBUTION_TONE.get(attribution.get("attribution"), "idle"),
+                "per_seed": [
+                    {
+                        "seed": row.get("seed"),
+                        "best_val_token_accuracy": row.get("best_val_token_accuracy"),
+                        "final_val_loss": row.get("final_val_loss"),
+                        "above_chance": row.get("above_chance"),
+                        "learnable": row.get("learnable"),
+                    }
+                    for row in (original.get("per_seed") or [])
+                ],
+            })
+        return rows
+
+    def get_probes(self) -> Dict[str, Any]:
+        """The P1c probes, with Addendum 03's amended verdicts applied post-hoc."""
+        amended = read_json(self.run_dir(BATCH01_DIR) / "amended_classification.json") or {}
+        sources = amended.get("sources") or {}
+        rows = []
+        for key, label, t, relative, note in PROBE_SOURCES:
+            report = read_json(self.runs_root / relative)
+            if report is None:
+                rows.append({"id": key, "label": label, "t": t, "note": note, "status": "missing",
+                             "message": f"{relative} not found."})
+                continue
+            rows.append({
+                "id": key, "label": label, "t": t, "note": note, "status": "available",
+                "report_path": relative,
+                "warm_start": bool((report.get("spec") or {}).get("warm_start")),
+                "fixed_step_budget": report.get("fixed_step_budget"),
+                "by_k": self._per_k_rows(report.get("classification_by_k") or {},
+                                         (sources.get(key) or {}).get("amended_by_k")),
+            })
+        return {"status": "available", "probes": rows,
+                "majority_class_percent_by_t": amended.get("majority_class_percent_by_t")}
+
+    def get_batch01(self) -> Dict[str, Any]:
+        """Batch 01's diagnostic arms, each one lever against a common reference."""
+        amended_path = self.run_dir(BATCH01_DIR) / "amended_classification.json"
+        amended = read_json(amended_path) or {}
+        sources = amended.get("sources") or {}
+
+        arms, classified, moved = [], 0, 0
+        for key, label, lever, pattern, question in BATCH01_ARMS:
+            path = self._glob_report(BATCH01_DIR, pattern)
+            if path is None:
+                arms.append({"id": key, "label": label, "lever": lever, "question": question,
+                             "status": "missing", "message": f"no report matching {pattern}."})
+                continue
+            report = read_json(path) or {}
+            source = sources.get(key) or {}
+            by_k = report.get("classification_by_k") or {}
+            entry = {
+                "id": key, "label": label, "lever": lever, "question": question,
+                "status": "available", "report_path": _rel(path),
+                "steps": report.get("steps"),
+                "by_k": self._per_k_rows(by_k, source.get("amended_by_k")),
+                # Arm 1 is a gate and Arm 2a is a measurement; neither is classified.
+                "is_gate": key == "arm1",
+                "gate_passed": report.get("gate_passed"),
+                "moves_under_arm5_criteria": source.get("moves_under_arm5_criteria"),
+            }
+            if by_k:
+                classified += 1
+                if source.get("moves_under_arm5_criteria"):
+                    moved += 1
+            arms.append(entry)
+
+        return {
+            "status": "available",
+            "run_dir": BATCH01_DIR,
+            "arms": arms,
+            "amended_rule_source": _rel(amended_path) if amended_path.is_file() else None,
+            "classified_arms": classified,
+            "arms_that_moved": moved,
+            # ARM5_CRITERIA §2: Arm 5 is approved only if >= 2 arms individually move.
+            "arm5_threshold": 2,
+            "arm5_approved": moved >= 2,
+            "stage3_row": ("all arms NOT LEARNABLE" if classified and moved == 0 else None),
+        }
+
+    def get_batch02(self) -> Dict[str, Any]:
+        """Batch 02's T=3 probe. Pending until its report exists."""
+        key, label, t, pattern, question = BATCH02_PROBE
+        path = self._glob_report(BATCH02_DIR, pattern)
+        gates_t3 = read_json(self.run_dir(GATES_T3_DIR) / "gates_t3_report.json")
+        shortcut = (gates_t3 or {}).get("shortcut_mechanism") or {}
+        # G2 fails at T=3, so accuracy alone cannot separate depth-3 composition
+        # from the shallow candidate. The view must show the ceiling next to any
+        # accuracy, which is why it travels with this payload either way.
+        context = {
+            "t": t, "question": question,
+            "g2_passed": None if gates_t3 is None else gates_t3.get("G2_passed"),
+            "g1_passed": None if gates_t3 is None else gates_t3.get("G1_passed"),
+            "shortcut_candidate": shortcut.get("candidate"),
+            "shortcut_condition": shortcut.get("condition"),
+            "shortcut_token_agreement": shortcut.get("token_agreement"),
+            "shortcut_agreement_iff_condition": shortcut.get("agreement_iff_condition"),
+            "gates_t3_path": (_rel(self.run_dir(GATES_T3_DIR) / "gates_t3_report.json")
+                              if gates_t3 is not None else None),
+            "preregistration": "PHASE2_BATCH_02_PREREG.md",
+            "addendum": "PHASE2_BATCH_02_ADDENDUM_01.md",
+        }
+        if path is None:
+            return {"status": "missing", "message": MISSING_BATCH02_MESSAGE,
+                    "run_dir": BATCH02_DIR, "id": key, "label": label, **context}
+
+        report = read_json(path) or {}
+        curves = read_json(Path(path).parent / "curve_analysis.json")
+        detail = report.get("detail") or []
+        return {
+            "status": "available",
+            "run_dir": BATCH02_DIR, "id": key, "label": label, **context,
+            "report_path": _rel(path),
+            "report_sha256": _sha256(Path(path)),
+            "smoke": bool(report.get("smoke")),
+            "config": report.get("config"),
+            "majority_class_percent": report.get("majority_class_percent_t3"),
+            "by_k": self._per_k_rows(report.get("classification_by_k") or {},
+                                     report.get("amended_classification_by_k"),
+                                     report.get("shortcut_attribution_by_k")),
+            "cells": [
+                {
+                    "k": cell.get("k"), "seed": cell.get("seed"),
+                    "steps_run": cell.get("steps_run"),
+                    "distinct_predicted_tokens": cell.get("best_val_distinct_predicted_tokens"),
+                    "shortcut_agreement_percent": cell.get("best_val_shortcut_agreement_percent"),
+                    # The Batch 01 deviation, fixed: a recorded field, not console output.
+                    "stage_boundary_validation": cell.get("stage_boundary_validation"),
+                }
+                for cell in detail
+            ],
+            "curve_analysis": curves,
+        }
+
+    def get_record(self) -> Dict[str, Any]:
+        """The pre-registration and correction documents, with checksums.
+
+        The project's claim is that decision rules were committed before the
+        results they govern. That is only checkable if the documents are listed
+        with their hashes, so they are.
+        """
+        rows = []
+        for name, label, kind in RECORD_DOCUMENTS:
+            path = REPO_ROOT / name
+            rows.append({"name": name, "label": label, "kind": kind,
+                         "present": path.is_file(), "sha256": _sha256(path) if path.is_file() else None})
+        return {"status": "available", "documents": rows,
+                "errata": sum(1 for r in rows if r["kind"] == "erratum" and r["present"]),
+                "addenda": sum(1 for r in rows if r["kind"] == "addendum" and r["present"])}
+
+    def get_diagnostics(self) -> Dict[str, Any]:
+        """Everything that ran instead of the grid: probes, Batch 01, Batch 02."""
+        return {
+            "status": "available",
+            "probes": self.get_probes(),
+            "batch01": self.get_batch01(),
+            "batch02": self.get_batch02(),
+            "record": self.get_record(),
+        }
+
     # -- aggregate ---------------------------------------------------------------
 
     def get_status(self) -> Dict[str, Any]:
@@ -794,5 +1061,6 @@ class Phase2Loader:
             "plan": guarded(self.get_plan),
             "p1b": guarded(self.get_p1b),
             "results": guarded(self.get_results),
+            "diagnostics": guarded(self.get_diagnostics),
             "provenance": {"git": _git_head(), "runs_root": str(self.runs_root), "configs": configs},
         }

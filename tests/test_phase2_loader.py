@@ -568,3 +568,143 @@ def test_p1b2_running_state_comes_from_artifacts_only(tmp_path):
 
 def test_capacity_diagnostics_appear_in_the_status_payload(empty_runs):
     assert empty_runs.get_status()["capacity_diagnostics"]["status"] == "available"
+
+
+# ---------------------------------------------------------------------------
+# Probes and diagnostic batches
+#
+# These are the only Phase 2 results that exist, and the claims they support
+# are fragile in specific ways. Each test below pins one of those ways.
+# ---------------------------------------------------------------------------
+
+
+def _write_batch01(runs_root: Path, *, moved=False):
+    """A minimal Batch 01: the Arm 1 gate and one classified arm."""
+    batch = runs_root / "phase2" / "batch01"
+    (batch / "arm1_fixed_set").mkdir(parents=True)
+    (batch / "arm1_fixed_set" / "arm1_report.json").write_text(
+        json.dumps({"arm": "1", "gate_passed": True}), encoding="utf-8")
+    (batch / "arm2b_residual_fix").mkdir(parents=True)
+    (batch / "arm2b_residual_fix" / "arm2b_residual_fix_report.json").write_text(
+        json.dumps({
+            "arm": "arm2b_residual_fix", "steps": 20000,
+            "classification_by_k": {
+                "1": {"classification": "PARTIAL", "seeds_above_chance": [2],
+                      "seeds_meeting_learnable_bar": [], "n_seeds": 3, "per_seed": []},
+            },
+        }), encoding="utf-8")
+    (batch / "amended_classification.json").write_text(
+        json.dumps({
+            "majority_class_percent_by_t": {"4": 1.9244},
+            "sources": {"arm2b": {
+                "t": 4, "fix": "output", "moves_under_arm5_criteria": moved,
+                "amended_by_k": {"1": {
+                    "classification_original": "PARTIAL",
+                    "classification_amended": "PARTIAL" if moved else "DEGENERATE",
+                    "changed": not moved,
+                    "seeds_above_chance_amended": [1, 2] if moved else [],
+                    "seeds_meeting_learnable_bar_amended": [],
+                    "degenerate_seeds": [] if moved else [0, 1, 2],
+                    "per_seed": [],
+                }},
+            }},
+        }), encoding="utf-8")
+
+
+def test_diagnostics_reports_every_source_as_missing_on_an_empty_runs_root(empty_runs):
+    diagnostics = empty_runs.get_diagnostics()
+    assert diagnostics["status"] == "available"
+    assert diagnostics["batch02"]["status"] == "missing"
+    assert all(p["status"] == "missing" for p in diagnostics["probes"]["probes"])
+    assert all(a["status"] == "missing" for a in diagnostics["batch01"]["arms"])
+    # No arm classified, so no Stage 3 row may be claimed.
+    assert diagnostics["batch01"]["classified_arms"] == 0
+    assert diagnostics["batch01"]["stage3_row"] is None
+
+
+def test_both_classifications_are_reported_never_one_in_place_of_the_other(tmp_path):
+    """Addendum 03 §3.3: neither replaces the other in the record."""
+    _write_batch01(tmp_path)
+    arm = next(a for a in Phase2Loader(tmp_path).get_batch01()["arms"] if a["id"] == "arm2b")
+    row = arm["by_k"][0]
+    assert row["classification"] == "PARTIAL"
+    assert row["classification_amended"] == "DEGENERATE"
+    assert row["changed"] is True
+    assert row["classification_tone"] == "warn" and row["classification_amended_tone"] == "fail"
+
+
+def test_the_gate_arm_is_kept_but_not_classified(tmp_path):
+    """Arm 1 is a fit gate, so it must never present a learnability verdict."""
+    _write_batch01(tmp_path)
+    arm = next(a for a in Phase2Loader(tmp_path).get_batch01()["arms"] if a["id"] == "arm1")
+    assert arm["status"] == "available"
+    assert arm["is_gate"] is True and arm["gate_passed"] is True
+    assert arm["by_k"] == []
+
+
+def test_arm5_trigger_needs_two_arms_and_is_computed_not_assumed(tmp_path):
+    _write_batch01(tmp_path, moved=False)
+    blocked = Phase2Loader(tmp_path).get_batch01()
+    assert blocked["arms_that_moved"] == 0
+    assert blocked["arm5_threshold"] == 2
+    assert blocked["arm5_approved"] is False
+    assert blocked["stage3_row"] == "all arms NOT LEARNABLE"
+
+    _write_batch01(tmp_path / "moved", moved=True)
+    one_moved = Phase2Loader(tmp_path / "moved").get_batch01()
+    # One arm moving is still not two, and it is no longer the all-NOT-LEARNABLE row.
+    assert one_moved["arms_that_moved"] == 1
+    assert one_moved["arm5_approved"] is False
+    assert one_moved["stage3_row"] is None
+
+
+def test_batch02_carries_the_t3_shortcut_context_even_before_it_reports(tmp_path):
+    """G2 fails at T=3, and that is a property of the task, measured beforehand.
+
+    A reader looking at a pending Batch 02 must still be told why a T=3
+    accuracy will need an attribution, so the context travels with the
+    pending payload rather than only with a result.
+    """
+    gates = tmp_path / "phase2" / "gates_t3"
+    gates.mkdir(parents=True)
+    (gates / "gates_t3_report.json").write_text(json.dumps({
+        "t": 3, "G1_passed": True, "G2_passed": False,
+        "shortcut_mechanism": {"applicable": True, "candidate": "window_product_forward",
+                               "condition": "(s[i+1]*s[i+2])^2 = e", "token_agreement": 0.2666,
+                               "agreement_iff_condition": True},
+    }), encoding="utf-8")
+
+    batch02 = Phase2Loader(tmp_path).get_batch02()
+    assert batch02["status"] == "missing"
+    assert batch02["g2_passed"] is False
+    assert batch02["shortcut_candidate"] == "window_product_forward"
+    assert batch02["shortcut_agreement_iff_condition"] is True
+    assert "PHASE2_BATCH_02_PREREG.md" in batch02["preregistration"]
+
+
+def test_batch02_smoke_report_is_flagged_as_such(tmp_path):
+    """A smoke run uses the same code path, so it must be impossible to mistake."""
+    run = tmp_path / "phase2" / "batch02" / "t3_curriculum_smoke"
+    run.mkdir(parents=True)
+    # Deliberately named as the real report, to prove the flag is what marks it.
+    (run / "t3_curriculum_report.json").write_text(json.dumps({
+        "batch": "02", "smoke": True, "target_t": 3, "config": {"steps": 40},
+        "classification_by_k": {}, "detail": [],
+    }), encoding="utf-8")
+    assert Phase2Loader(tmp_path).get_batch02()["smoke"] is True
+
+
+def test_record_lists_missing_documents_rather_than_hiding_them(empty_runs):
+    record = empty_runs.get_record()
+    assert record["status"] == "available"
+    names = {doc["name"] for doc in record["documents"]}
+    assert "PHASE2_BATCH_02_PREREG.md" in names
+    assert "PHASE2_BATCH_01_REPORT_ERRATUM_01.md" in names
+    # Every present document carries a checksum, because the claim that a rule
+    # predates its results is only checkable against one.
+    for doc in record["documents"]:
+        assert doc["present"] is (doc["sha256"] is not None)
+
+
+def test_status_includes_diagnostics(empty_runs):
+    assert empty_runs.get_status()["diagnostics"]["status"] == "available"

@@ -26,6 +26,7 @@ const DESCRIPTOR = {
   capacity: 'P1b / P1b-2',
   width: 'D5 / D6',
   budget: 'Step budget',
+  probes: 'Batch 01 / 02',
   matrix: 'K × T',
   analysis: 'Δ(T), K*(T)',
 };

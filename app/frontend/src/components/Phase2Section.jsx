@@ -9,8 +9,8 @@
  * The page is a research paper turned into a console, read top to bottom:
  *
  *   01 overview -> 02 question -> 03 pipeline -> 04 benchmark -> 05 gates ->
- *   06 capacity -> 07 width gate -> 08 matrix -> 09 controls -> 10 results ->
- *   11 analysis -> implementation reference
+ *   06 capacity -> 07 width gate -> 08 matrix -> 09 probes & batches ->
+ *   10 results -> 11 analysis -> implementation reference
  *
  * The navigation scrolls between them rather than hiding them, so the page
  * still reads as one continuous argument.
@@ -38,6 +38,7 @@ import { CapacityPanel } from './phase2/CapacityPanel.jsx';
 import { WidthGatePanel } from './phase2/WidthGatePanel.jsx';
 import { PrimaryMatrixPanel } from './phase2/PrimaryMatrixPanel.jsx';
 import { ControlsPanel } from './phase2/ControlsPanel.jsx';
+import { DiagnosticsPanel } from './phase2/DiagnosticsPanel.jsx';
 import { ResultsPanel } from './phase2/ResultsPanel.jsx';
 import { AnalysisPanel } from './phase2/AnalysisPanel.jsx';
 import { MethodologyDrawer } from './phase2/MethodologyDrawer.jsx';
@@ -49,6 +50,7 @@ const TARGET = {
   methodology: 'methodology',
   diagnostics: 'diagnostics',
   experiments: 'experiments',
+  probes: 'probes',
   results: 'results',
   analysis: 'analysis',
 };
@@ -109,6 +111,8 @@ export function Phase2Section({ status, error, presentationMode = false }) {
         <div className="rc-section">
           <ControlsPanel status={status} />
         </div>
+
+        <DiagnosticsPanel status={status} showInternals={show.showDiagnosticInternals} />
 
         <ResultsPanel status={status} showMetricNames={show.showPlannedMetricNames} />
         <AnalysisPanel status={status} showInternals={show.showDiagnosticInternals} />

@@ -114,3 +114,9 @@ def get_phase2_combined_capacity():
 @app.get("/api/phase2/results")
 def get_phase2_results():
     return phase2.get_results()
+
+
+@app.get("/api/phase2/diagnostics")
+def get_phase2_diagnostics():
+    """Probes A/B, Batch 01's arms and Batch 02's T=3 probe, with the record."""
+    return phase2.get_diagnostics()

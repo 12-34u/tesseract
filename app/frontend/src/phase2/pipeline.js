@@ -155,6 +155,36 @@ function capacityStage(capacity) {
  * Dependencies are stated so a blocked stage reads as "waiting for X" rather
  * than as a fault.
  */
+/**
+ * The probes-and-batches rail stage.
+ *
+ * ATTENTION rather than DONE when arms have reported and none moved: the batch
+ * completed successfully and its result is negative, which is a state the
+ * reader should be sent to rather than one that reads as finished business.
+ */
+function diagnosticsStage(diagnostics) {
+  if (!isAvailable(diagnostics)) {
+    return { state: STAGE_WAITING, summary: 'No probe or batch artifacts.' };
+  }
+  const batch01 = diagnostics.batch01 || {};
+  const batch02 = diagnostics.batch02 || {};
+  const classified = batch01.classified_arms || 0;
+  const moved = batch01.arms_that_moved;
+  const batch02Reported = batch02.status === 'available' && !batch02.smoke;
+
+  if (!classified) return { state: STAGE_ACTIVE, summary: 'Probes recorded; no arm classified yet.' };
+  if (!batch02Reported) {
+    return {
+      state: STAGE_ACTIVE,
+      summary: `${classified} Batch 01 arms classified, ${moved ?? 0} moved. Batch 02's T=3 probe has not reported.`,
+    };
+  }
+  return {
+    state: moved === 0 ? STAGE_ATTENTION : STAGE_DONE,
+    summary: `${classified} Batch 01 arms classified, ${moved} moved. Batch 02 reported at T=3.`,
+  };
+}
+
 export function pipelineStages(status) {
   const gates = status?.gates;
   const capacity = status?.capacity_diagnostics;
@@ -166,6 +196,7 @@ export function pipelineStages(status) {
   const benchmarkAvailable = isAvailable(status?.benchmark);
   const gate = gateStage(gates);
   const cap = capacityStage(capacity);
+  const diagnostics = diagnosticsStage(status?.diagnostics);
 
   const widthChosen = Boolean(selection.selectedWidth);
   const budgetChosen = selection.recommendedMaxSteps != null;
@@ -224,8 +255,16 @@ export function pipelineStages(status) {
       dependency: 'Research width (D5)',
     },
     {
-      id: 'matrix',
+      id: 'probes',
       index: '06',
+      title: 'Probes & Batches',
+      state: diagnostics.state,
+      summary: diagnostics.summary,
+      dependency: 'Gate validation',
+    },
+    {
+      id: 'matrix',
+      index: '07',
       title: 'Primary Matrix',
       state: primaryCompleted > 0 ? STAGE_ACTIVE : blocked.length ? STAGE_LOCKED : STAGE_WAITING,
       summary:
@@ -239,7 +278,7 @@ export function pipelineStages(status) {
     },
     {
       id: 'analysis',
-      index: '07',
+      index: '08',
       title: 'Analysis',
       state: isAvailable(results) ? STAGE_DONE : STAGE_LOCKED,
       summary: isAvailable(results) ? 'Analysis artifact recorded.' : 'Not started.',
@@ -722,12 +761,22 @@ export const SECTIONS = [
   { id: 'methodology', label: 'Methodology' },
   { id: 'diagnostics', label: 'Diagnostics' },
   { id: 'experiments', label: 'Experiments' },
+  { id: 'probes', label: 'Probes & batches' },
   { id: 'results', label: 'Results' },
   { id: 'analysis', label: 'Analysis' },
 ];
 
 /** Sections shown in presentation mode: research only, no implementation detail. */
-export const PRESENTATION_SECTIONS = new Set(['overview', 'methodology', 'experiments', 'results', 'analysis']);
+export const PRESENTATION_SECTIONS = new Set([
+  'overview',
+  'methodology',
+  'experiments',
+  // The probes and diagnostic batches are research, not implementation detail:
+  // they are the only Phase 2 results that exist, so presentation mode keeps them.
+  'probes',
+  'results',
+  'analysis',
+]);
 
 /**
  * What presentation mode hides.

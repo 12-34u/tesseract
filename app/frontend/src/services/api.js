@@ -28,4 +28,5 @@ export const api = {
   getPhase2Capacity: () => fetchJson('/api/phase2/capacity'),
   getPhase2CombinedCapacity: () => fetchJson('/api/phase2/combined-capacity'),
   getPhase2Results: () => fetchJson('/api/phase2/results'),
+  getPhase2Diagnostics: () => fetchJson('/api/phase2/diagnostics'),
 };
