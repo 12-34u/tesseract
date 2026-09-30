@@ -2,6 +2,12 @@
 
 **Date: 2026-09-30.** Chain completed 00:08:44; every arm exited `rc=0`.
 
+> **Two claims in §5 are withdrawn or replaced by
+> [PHASE2_BATCH_01_REPORT_ERRATUM_01.md](PHASE2_BATCH_01_REPORT_ERRATUM_01.md)
+> (2026-09-30).** Nothing below is edited and no number or classification
+> changes; read that file alongside §5. This notice is the only line added
+> after the report was committed.
+
 Classifications are applied mechanically: the pre-registered rule
 ([PHASE2_BATCH_01_PREREG.md](PHASE2_BATCH_01_PREREG.md) §3) as each arm applied
 it to itself while running, and the amended rule

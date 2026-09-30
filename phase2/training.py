@@ -77,6 +77,7 @@ class TrainOutcome:
     test: Optional[SplitMetrics]
     test_predictions: Optional[np.ndarray]
     history: List[Dict]
+    hook_records: List[Dict]
     gradient_norm_stats: Dict
     best_state: Optional[Dict]
     final_state: Optional[Dict]
@@ -99,6 +100,7 @@ def train_fixed_steps(
     vocab_size: int,
     stop_condition: Optional[Callable[[SplitMetrics], bool]] = None,
     lr_schedule: Optional[Callable[[int], float]] = None,
+    step_hooks: Optional[Dict[int, Callable[[int], Dict]]] = None,
     log: Callable[[str], None] = print,
 ) -> TrainOutcome:
     """``lr_schedule`` maps a 0-based step to a learning rate.
@@ -106,9 +108,18 @@ def train_fixed_steps(
     Optional and unused by the grid, which trains at a constant rate. It exists
     for the Batch 01 optimiser check, and when it is None the loop behaves
     exactly as before.
+
+    ``step_hooks`` maps a 1-based step to a measurement taken *at the end of
+    that step*, before the next batch is drawn. Its results are returned in
+    ``TrainOutcome.hook_records`` so they become a recorded report field rather
+    than console output. It exists because Batch 01's Arm 3 measured the
+    per-depth diagnostics once after training instead of at each curriculum
+    stage boundary, which is the deviation Batch 02 is required to fix; when it
+    is None the loop behaves exactly as before.
     """
     optimizer = build_optimizer(model, training.optimizer)
     history: List[Dict] = []
+    hook_records: List[Dict] = []
     best_state, best_score, best_step, best_val, best_val_loss = None, -math.inf, None, None, None
     final_val, final_val_loss = None, None
     stopped_reason = "budget"
@@ -169,6 +180,13 @@ def train_fixed_steps(
                 stopped_reason = "stop_condition"
                 break
 
+        if step_hooks is not None and step in step_hooks:
+            # At the end of this step, so the measurement describes the model
+            # the finishing stage produced and not the one after it.
+            start = time.perf_counter()
+            hook_records.append({"step": step, **(step_hooks[step](step) or {})})
+            eval_seconds += time.perf_counter() - start
+
     final_state = copy.deepcopy(model.state_dict())
     test, test_predictions = None, None
     if best_state is not None:
@@ -190,6 +208,7 @@ def train_fixed_steps(
         test=test,
         test_predictions=test_predictions,
         history=history,
+        hook_records=hook_records,
         gradient_norm_stats={"mean": grad_sum / grad_count if grad_count else None,
                              "max": grad_max if grad_count else None,
                              "non_finite_steps": grad_non_finite},
