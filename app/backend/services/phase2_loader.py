@@ -112,6 +112,7 @@ RECORD_DOCUMENTS = (
     ("PHASE2_BATCH_01_REPORT_ERRATUM_01.md", "Batch 01 report Erratum 01", "erratum"),
     ("PHASE2_BATCH_02_PREREG.md", "Batch 02 pre-registration — the T=3 probe", "prereg"),
     ("PHASE2_BATCH_02_ADDENDUM_01.md", "Batch 02 Addendum 01 — per-K combination rule", "addendum"),
+    ("PHASE2_BATCH_02_REPORT.md", "Batch 02 report — T=3 learnable at K=1, not at K=8", "report"),
     ("PHASE1_FREEZE_ERRATUM.md", "Phase 1 freeze erratum", "erratum"),
 )
 

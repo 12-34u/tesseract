@@ -46,7 +46,10 @@ import {
 
 const pct = (value, digits = 2) => (Number.isFinite(value) ? `${value.toFixed(digits)} %` : '—');
 const num = (value, digits = 4) => (Number.isFinite(value) ? value.toFixed(digits) : '—');
+// A per-cell crossing that did not happen is "never" — a fact about that cell.
+// A mean over cells that never crossed is not "never", it is undefined.
 const step = (value) => (Number.isFinite(value) ? Math.round(value).toLocaleString() : 'never');
+const stepOrDash = (value) => (Number.isFinite(value) ? Math.round(value).toLocaleString() : '—');
 const label = (value) => (value ? String(value).replace(/_/g, ' ') : '—');
 
 /** Original -> amended, as one cell. The arrow is the point of the column. */
@@ -248,7 +251,7 @@ function Batch02Body({ state }) {
               <td className="rc-mono">{step(cell.crossedCeilingAt)}</td>
               <td className="rc-mono">
                 {Number.isFinite(cell.finalSlope) ? `${cell.finalSlope >= 0 ? '+' : ''}${cell.finalSlope.toFixed(3)}` : '—'}
-                {cell.stillRising ? <Tag tone="note">rising</Tag> : null}
+                {cell.stillRising ? <> <Tag tone="note">rising</Tag></> : null}
               </td>
               <td className="rc-mono">{cell.distinctTokens ?? '—'}</td>
             </tr>
@@ -278,7 +281,7 @@ function Batch02Body({ state }) {
                   <td className="rc-mono">{row.cells}</td>
                   <td className="rc-mono">{pct(row.meanBestAccuracy)}</td>
                   <td className="rc-mono">{pct(row.meanShortcutAgreement)}</td>
-                  <td className="rc-mono">{step(row.meanTakeoffStep)}</td>
+                  <td className="rc-mono">{stepOrDash(row.meanTakeoffStep)}</td>
                   <td className="rc-mono">
                     {Number.isFinite(row.meanFinalSlope)
                       ? `${row.meanFinalSlope >= 0 ? '+' : ''}${row.meanFinalSlope.toFixed(3)}`
