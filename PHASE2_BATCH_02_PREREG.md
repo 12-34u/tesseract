@@ -49,9 +49,13 @@ evaluation-only depth of the benchmark (`interpolation_t_values` in
 
 ## 2. G2 fails at T = 3, and this is the most important thing in this file
 
-The gates had only ever been run at T ∈ {1, 2, 4, 8}. Run at T = 3 on CPU
-(`phase2.gates.evaluate_group("A5", [3], 17, …)`, the committed gate config,
-seed 7, 10,000 states):
+The gates had only ever been run at T ∈ {1, 2, 4, 8}, the benchmark's
+`t_values`. Run at T = 3 on CPU by `scripts/phase2_gates_t3.py` — the committed
+gate config, seed 7, 10,000 states, no model loaded — and **recorded as an
+artifact** at `runs/phase2/gates_t3/gates_t3_report.json`, so every figure below
+is re-readable rather than transcribed from a terminal. (Leaving it as console
+output would have repeated, in the file that fixes it, the deviation §7 is
+about.) It changes no gate verdict:
 
 | | result |
 |---|---|
@@ -72,8 +76,14 @@ s_i·s_{i+1}, so
 and F³[i] equals s_i s_{i+1} s_{i+2} s_{i+3} **iff (s_{i+1} s_{i+2})² = e**.
 Sixteen of A5's sixty elements square to the identity, giving 16/60 = 26.667 %.
 Checked token-for-token against `phase2.automaton.iterate` over 20,000 states:
-the agreement mask and the involution mask are identical everywhere, and
-`tests/phase2/test_batch02.py` re-checks it.
+the agreement mask and the involution mask are **identical everywhere**, not
+merely equal in rate (`shortcut_mechanism.agreement_iff_condition: true` in the
+artifact). That distinction is what licenses §5 — the candidate is not an
+approximation of F³ that a good model would partly share, it is exact on a fixed
+subset of windows and unrelated outside it. `tests/phase2/test_batch02.py`
+re-checks the identity, and re-checks the same code against the *T = 2*
+mechanism, whose 0.26619 agreement is independently recorded in
+`runs/phase2/gates_amendment01/amendment_evaluation.json`.
 
 This is **the same mechanism as the documented T = 2 failure**, where
 s[i]·s[i+2] agrees with F² iff s_{i+1}² = e, also 26.667 %. Amendment 01 handled

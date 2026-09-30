@@ -93,6 +93,25 @@ def test_the_t3_shortcut_is_right_exactly_when_a_local_product_is_an_involution(
     assert np.array_equal(agrees, condition)
 
 
+def test_the_t2_shortcut_is_right_exactly_when_the_middle_cell_is_an_involution(states):
+    """The same mechanism one depth down, and this one has an independent record.
+
+    Amendment 01 documented the T = 2 G2 failure at 0.26619 token agreement with
+    16/60 elements squaring to the identity
+    (`runs/phase2/gates_amendment01/amendment_evaluation.json`). Reproducing that
+    from the same code that handles T = 3 is what makes the T = 3 mechanism
+    claim more than an assertion about one depth.
+    """
+    group = get_group("A5")
+    table = group.table
+    identity = next(e for e in range(60) if all(table[e, x] == x for x in range(60)))
+    middle = np.roll(states, -1, axis=1)
+    condition = table[middle, middle] == identity
+    agrees = shortcut_prediction(group, states, 2) == iterate(group, states, 2)
+    assert np.array_equal(agrees, condition)
+    assert agrees.mean() == pytest.approx(16 / 60, abs=0.01)
+
+
 def test_a_true_solver_and_a_shortcut_solver_are_far_apart_on_the_diagnostic(states):
     """The two hypotheses differ by ~73 points on agreement, and not at all on it being above the bar."""
     group = get_group("A5")
