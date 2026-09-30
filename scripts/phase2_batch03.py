@@ -31,6 +31,7 @@ Usage:
 import argparse
 import sys
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -61,6 +62,7 @@ from phase2.models import build_model  # noqa: E402
 from phase2.probes import classify  # noqa: E402
 from phase2.reclassify import amend_report, distinct_predicted_tokens, majority_class_percent  # noqa: E402
 from phase2.runner import splits_dir  # noqa: E402
+from phase2.salvage import BOUNDARY_MISSING_FIELDS, salvage  # noqa: E402
 from phase2.groups import get_group  # noqa: E402
 from phase2.metrics import compute_metrics  # noqa: E402
 from phase2.training import predict_with_loss, train_fixed_steps  # noqa: E402
@@ -83,6 +85,19 @@ BATCH, EVAL_EVERY = 128, 250
 #: number of stage boundaries, ~40 steps instead of 35,000.
 SMOKE_CONFIG = {**PROBE_CONFIG, "curriculum_stages": [1, 2, 3], "steps_per_stage": 10,
                 "target_steps": 10, "steps": 40, "k_values": [1, 8], "seeds": 1}
+
+
+def resume_dir(name: str) -> Optional[Path]:
+    """The existing run directory a resume should continue into, or None.
+
+    Resume is the one case where writing into a populated directory is correct,
+    because the point is to keep the cells already in it.
+    """
+    base = resolve_run_dir(f"{ROOT}/{name}")
+    candidates = sorted((p for p in base.parent.glob(base.name + "*")
+                         if p.is_dir() and "_smoke" not in p.name and (p / "cells").is_dir()),
+                        key=lambda p: p.name)
+    return candidates[-1] if candidates else None
 
 
 def out_dir(name: str) -> Path:
@@ -176,6 +191,94 @@ def bounded_growth_gate(device, benchmark, model_cfg, val, run_dir, k_values) ->
     return passed
 
 
+def recover_cell(cell, cell_dir, checkpoint, k, seed, model_cfg, benchmark, splits, group, device,
+                 salvaged_cell):
+    """Rebuild a finished cell's record from its checkpoint, without retraining.
+
+    Everything measured on the final model is recomputed here, so those fields
+    are artifact-backed exactly as a freshly trained cell's are: accuracy, loss,
+    distinct tokens, shortcut agreement, the per-depth diagnostics and the
+    post-training bound.
+
+    The curve and the stage boundaries cannot be recomputed — they were measured
+    during training — so they come from the console log and are tagged
+    accordingly. `stage_boundary_missing_fields` names what the log did not
+    print, so a salvaged cell never reads as though it were whole.
+    """
+    val = splits[TARGET_T]
+    set_seed(seed)
+    built = build_model("tesseract", k, model_cfg, benchmark.n)
+    model = built.model.to(device)
+    patched = apply_per_step_norm(model, elementwise_affine=False)
+    model.load_state_dict(torch.load(checkpoint, map_location=device))
+
+    predictions, loss = predict_with_loss(model, val.inputs, val.targets, device, benchmark.val_size)
+    accuracy = float((predictions == val.targets).mean() * 100.0)
+    agreement = shortcut_agreement_percent(predictions, group, val.inputs, TARGET_T)
+    distinct = distinct_predicted_tokens(predictions)
+    post = hidden_state_norms(model, val.inputs[:256], device)
+    growth = post[-1]["z_L_rms"] / post[0]["z_L_rms"]
+    held = bound_held(growth)
+
+    curve = (salvaged_cell or {}).get("curve") or []
+    boundaries = (salvaged_cell or {}).get("stage_boundary_validation") or []
+    record = {
+        "seed": seed, "k": k,
+        "best_val": {"token_accuracy": accuracy, "loss": float(loss)},
+        # The final-checkpoint validation loss IS recoverable: the last curve
+        # point is the evaluation at the final step, which is what the training
+        # loop records as final_val_loss. Without it the rule's above-chance-by-
+        # loss arm would be silently disabled for recovered cells.
+        "final_val": {"token_accuracy": accuracy, "loss": (curve[-1]["val_loss"] if curve else None)},
+        "num_evaluations": len(curve),
+        "per_example_token_accuracy_se": per_example_se(predictions, val.targets),
+        "cell_dir": str(cell_dir),
+    }
+    entry = {
+        "k": k, "seed": seed, "cell_id": cell.cell_id,
+        "steps_run": curve[-1]["step"] if curve else None,
+        "stopped_reason": "recovered_from_checkpoint",
+        "parameter_count": built.parameter_count,
+        "patched_module": patched,
+        "per_step_norm_elementwise_affine": False,
+        "post_training_per_step_rms": post,
+        "post_training_growth_ratio": growth,
+        "post_training_bound_held": held,
+        "stage_boundary_validation": boundaries,
+        "best_checkpoint_validation_by_t": depth_diagnostics(model, splits, group, device, benchmark.val_size),
+        "best_val_distinct_predicted_tokens": distinct,
+        "best_val_shortcut_agreement_percent": agreement,
+        "curve": curve,
+        # Provenance, per field group, so a reader can see which cells are
+        # artifact-backed throughout and which are not.
+        "source": "recovered_from_checkpoint",
+        "recomputed_from_checkpoint": [
+            "best_val", "best_val_distinct_predicted_tokens", "best_val_shortcut_agreement_percent",
+            "best_checkpoint_validation_by_t", "post_training_per_step_rms",
+            "post_training_growth_ratio", "post_training_bound_held",
+        ],
+        "recovered_from_console_log": ["curve", "stage_boundary_validation", "steps_run",
+                                       "final_val.loss"],
+        "stage_boundary_missing_fields": list(BOUNDARY_MISSING_FIELDS),
+        "console_summary": (salvaged_cell or {}).get("console_summary"),
+    }
+    console = entry["console_summary"] or {}
+    drift = (None if not console else abs(console.get("best_val_token_accuracy", 0.0) - accuracy))
+    entry["console_vs_recomputed_accuracy_delta"] = drift
+    print(f"=== {NAME}: K={k} seed={seed} RECOVERED from checkpoint "
+          f"(no retrain; curve and boundaries from console log)")
+    print(f"    best val token {accuracy:.4f}%  loss {float(loss):.4f}  distinct {distinct}  "
+          f"shortcut agreement {agreement:.2f}%")
+    print(f"    post-training z_L RMS {post[0]['z_L_rms']:.4f} -> {post[-1]['z_L_rms']:.4f} "
+          f"(growth {growth:.4f}x) {'bound held' if held else 'BOUND BROKE'}")
+    if drift is not None:
+        # A mismatch would mean the checkpoint and the log are not from the same
+        # run, which is the one failure mode a resume must not paper over.
+        print(f"    console log said {console['best_val_token_accuracy']:.4f}%  "
+              f"delta {drift:.4f} points {'OK' if drift < 0.01 else '*** MISMATCH ***'}")
+    return entry, record
+
+
 def run(args) -> int:
     smoke = bool(getattr(args, "smoke", False))
     config = SMOKE_CONFIG if smoke else PROBE_CONFIG
@@ -184,8 +287,22 @@ def run(args) -> int:
     eval_every = 5 if smoke else EVAL_EVERY
     device, provenance, benchmark, model_cfg, store, splits = setup()
     val = splits[TARGET_T]
-    run_dir = out_dir(f"{NAME}_smoke" if smoke else NAME)
+    resume = bool(getattr(args, "resume", False)) and not smoke
+    run_dir = (resume_dir(NAME) if resume else None) or out_dir(f"{NAME}_smoke" if smoke else NAME)
     run_dir.mkdir(parents=True, exist_ok=True)
+    # Mid-training measurements cannot be recomputed from a checkpoint, so a
+    # resumed cell takes its curve and stage boundaries from the console log.
+    # Tagged as log-sourced: a console log has no checksum and its boundary rows
+    # are a subset of the recorded field.
+    salvaged = {}
+    if resume:
+        log = Path(f"runs/phase2/batch03_{NAME}.console.log")
+        if log.is_file():
+            salvaged = salvage(log)
+            print(f"=== resume: {run_dir}")
+            print(f"    salvaged {sum(1 for v in salvaged.values() if v['complete'])} complete cells from {log}")
+        else:
+            print(f"=== resume: {run_dir} (no console log at {log}; curves will be absent)")
     prereg = yaml.safe_load(PREREG.read_text(encoding="utf-8"))
     group = get_group(benchmark.group)
     boundaries = stage_boundary_steps(config["curriculum_stages"], config["steps_per_stage"],
@@ -205,11 +322,34 @@ def run(args) -> int:
 
     records, detail = [], []
 
+    def write_partial():
+        """Write what exists after every cell.
+
+        The batch lost nine finished cells to a reboot because the report is
+        only written once every cell completes. A partial written per cell costs
+        milliseconds and makes that unrepeatable.
+        """
+        write_json(run_dir / f"{NAME}_partial.json",
+                   {"batch": "03", "partial": True, "cells_done": len(detail),
+                    "cells_expected": len(k_values) * len(seeds),
+                    "config": dict(config), "provenance": provenance,
+                    "records": records, "detail": detail})
+
     for k in k_values:
         for seed in seeds:
             cell = CellSpec("tesseract", k, benchmark.group, "main", TARGET_T, seed)
             cell_dir = run_dir / "cells" / cell.cell_id
             cell_dir.mkdir(parents=True, exist_ok=True)
+
+            checkpoint = cell_dir / "best_checkpoint.pt"
+            if resume and checkpoint.is_file():
+                entry, record = recover_cell(cell, cell_dir, checkpoint, k, seed, model_cfg, benchmark,
+                                             splits, group, device, salvaged.get((k, seed)))
+                records.append(record)
+                detail.append(entry)
+                write_partial()
+                continue
+
             set_seed(seed)
             built = build_model("tesseract", k, model_cfg, benchmark.n)
             model = built.model.to(device)
@@ -289,6 +429,7 @@ def run(args) -> int:
             })
             print(f"    best val token {accuracy:.4f}%  loss {float(loss):.4f}  "
                   f"distinct {distinct}  shortcut agreement {agreement:.2f}%")
+            write_partial()
 
     by_k = {str(k): classify([r for r in records if r["k"] == k], prereg) for k in k_values}
     majority = majority_class_percent(val.targets)
@@ -319,6 +460,9 @@ def run(args) -> int:
 
     report = {
         "batch": "03", "probe": f"{NAME}_smoke" if smoke else NAME, "smoke": smoke,
+        "resumed": resume,
+        "recovered_cells": [[d["k"], d["seed"]] for d in detail
+                            if d.get("source") == "recovered_from_checkpoint"],
         "learnable_k": learnable_k,
         "trend_reading": trend,
         "post_training_bound_held_by_k": bounds,
@@ -359,6 +503,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--smoke", action="store_true",
                         help="tiny step counts, separate directory; exercises the path, not a result")
+    parser.add_argument("--resume", action="store_true",
+                        help="continue an interrupted run: skip cells with a best checkpoint, recompute "
+                             "their metrics from it, and take their curves from the console log")
     return run(parser.parse_args())
 
 

@@ -7,6 +7,15 @@
 # The Python runner refuses to train if the bounded-growth gate fails, so an
 # unbounded K cannot silently produce a null result here.
 #
+# Arguments are passed through to the Python runner, so a resume after an
+# interruption is:
+#
+#   systemd-run --user --unit=tesseract-batch03 --same-dir \
+#       scripts/phase2_batch03_chain.sh --resume
+#
+# The console log is appended to, not truncated, because a resume salvages the
+# curves and stage boundaries of already-finished cells out of it.
+#
 # Resumable by design. A probe whose report already exists is skipped, so an
 # interrupted run picks up where it stopped instead of redoing completed work.
 # A partially written directory is never overwritten: the Python runner sends
@@ -30,10 +39,10 @@ run () {   # $1 = label, $2 = report glob relative to runs/phase2/batch03, $3.. 
     return 0
   fi
   echo "START $label $(date -u +%H:%M:%S)" >> "$LOG"
-  "$@" > "runs/phase2/batch03_$label.console.log" 2>&1
+  "$@" >> "runs/phase2/batch03_$label.console.log" 2>&1
   echo "END $label rc=$? $(date -u +%H:%M:%S)" >> "$LOG"
 }
 
 run t3_k_sweep "t3_k_sweep*/t3_k_sweep_report.json" \
-    $PY -u scripts/phase2_batch03.py
+    $PY -u scripts/phase2_batch03.py "$@"
 echo "CHAIN COMPLETE $(date -u +%H:%M:%S)" >> "$LOG"
