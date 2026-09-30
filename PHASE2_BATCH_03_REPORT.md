@@ -4,6 +4,12 @@
 35,000 steps. Interrupted by a machine reboot and resumed; see §0 and
 [PHASE2_BATCH_03_ADDENDUM_01.md](PHASE2_BATCH_03_ADDENDUM_01.md).
 
+> **[PHASE2_BATCH_03_REPORT_NOTE_01.md](PHASE2_BATCH_03_REPORT_NOTE_01.md)
+> (2026-10-01) records that exact match is the more informative metric at T = 3,
+> and that K = 1's LEARNABLE verdict rests on token accuracy at ~0 % exact
+> match.** No classification changes. Nothing below is edited; this notice is the
+> only line added after the report was committed.
+
 Report: `runs/phase2/batch03/t3_k_sweep/t3_k_sweep_report.json`.
 Curves: `runs/phase2/batch03/t3_k_sweep/curve_analysis.json`.
 Gate: `runs/phase2/batch03/t3_k_sweep/bounded_growth_gate.json`.
