@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Takeoff steps and final slope for every Batch 02 cell, from the recorded curves.
+"""Takeoff steps and final slope for every T=3 cell, from the recorded curves.
+
+Serves Batch 02 and Batch 03. The filename keeps the `batch02` prefix because
+PHASE2_BATCH_03_PREREG.md §4 names it as the script Batch 03 uses, and a
+pre-registration should not be quietly falsified by a rename.
 
 Reads `detail[].curve` out of the Batch 02 report and computes nothing that is
 not already in it. No model is loaded, no training step is run, and no new
@@ -28,7 +32,7 @@ than left to the reader.
 This is descriptive. It is not part of any classification and does not touch the
 pre-registered outcome table.
 
-    python scripts/phase2_batch02_curves.py [--report PATH] [--window 2500]
+    python scripts/phase2_batch02_curves.py [--batch batch02|batch03] [--report PATH] [--window 2500]
 """
 
 import argparse
@@ -44,7 +48,13 @@ import numpy as np  # noqa: E402
 from utils.run_artifacts import write_json  # noqa: E402
 
 LEARNABLE_BAR_PERCENT = 100 / 60 + 5.0            # 6.6667 %, the pre-registered bar
-DEFAULT_REPORT_GLOB = "runs/phase2/batch02/t3_curriculum*/t3_curriculum_report.json"
+#: Where each batch's T=3 report lives. Smoke directories are excluded by the
+#: name of the report file itself (a smoke run writes `*_smoke_report.json`).
+BATCH_GLOBS = {
+    "batch02": "runs/phase2/batch02/t3_curriculum*/t3_curriculum_report.json",
+    "batch03": "runs/phase2/batch03/t3_k_sweep*/t3_k_sweep_report.json",
+}
+DEFAULT_REPORT_GLOB = BATCH_GLOBS["batch02"]
 
 
 def first_crossing(curve, threshold: float):
@@ -148,16 +158,19 @@ def analyse(report: dict, window: int, rising_threshold: float) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", default=None)
+    parser.add_argument("--batch", choices=sorted(BATCH_GLOBS), default=None,
+                        help="which batch's T=3 report to read; ignored when --report is given")
     parser.add_argument("--window", type=int, default=2500)
     parser.add_argument("--rising-threshold", type=float, default=0.1,
                         help="accuracy points per 1,000 steps above which a cell counts as still rising")
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
 
-    path = args.report or (sorted(glob.glob(DEFAULT_REPORT_GLOB))[-1]
-                           if glob.glob(DEFAULT_REPORT_GLOB) else None)
+    pattern = BATCH_GLOBS.get(args.batch, DEFAULT_REPORT_GLOB)
+    matches = sorted(p for p in glob.glob(pattern) if "_smoke" not in Path(p).name)
+    path = args.report or (matches[-1] if matches else None)
     if path is None:
-        print(f"no Batch 02 report found at {DEFAULT_REPORT_GLOB}", file=sys.stderr)
+        print(f"no report found at {pattern}", file=sys.stderr)
         return 1
     report = json.loads(Path(path).read_text())
     report["_path"] = str(path)
