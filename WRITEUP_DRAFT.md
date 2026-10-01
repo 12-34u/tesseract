@@ -10,8 +10,11 @@ narrative can be written before the remaining probes finish. Every section
 states where its numbers come from. Sections whose data does not exist yet are
 marked **PLACEHOLDER** and contain no invented figures.
 
-**Two things are outstanding, and the draft must not be finalised before both
-land.** First, the Batch 02 T = 3 probe is running as this is written
+**§10's outline is superseded by Batches 03 and 04 — see the dated note in §9a.
+It is not rewritten yet, and the reasons are there.**
+
+**Two things were outstanding when this draft was assembled, and the draft must
+not be finalised before both land.** First, the Batch 02 T = 3 probe is running as this is written
 ([PHASE2_BATCH_02_PREREG.md](PHASE2_BATCH_02_PREREG.md)); its outcome decides
 whether the learnability boundary claim in §10 is "T = 2" or something else.
 Second, §10's outline is an outline — a plan for the path-3 write-up, not the
@@ -627,6 +630,55 @@ What still cannot be claimed is anything about whether recursive depth helps. No
 experiment to date has produced a condition in which it *could* have shown up —
 K = 1 and K = 8 fail together, and they fail at the same depth. That is the
 honest shape of the negative result, and §10 is the plan for writing it.
+
+---
+
+## 9a. NOTE, 2026-10-01: §10's path-3 outline is superseded
+
+**Dated note. Nothing below is rewritten; §10 stands as committed so the change
+in the argument is visible rather than edited away.**
+
+§10 outlines a **negative-result** write-up: "unlearnable at reachable scale,
+with curriculum, confound fix and optimiser check all excluded". That outline was
+correct for the evidence at the time — Batch 01's Stage 3 row was "all arms NOT
+LEARNABLE" and nothing in the project had moved at any depth above T = 2.
+
+**Batches 03 and 04 superseded it.** In order:
+
+| | |
+|---|---|
+| [Batch 03](PHASE2_BATCH_03_REPORT.md) | With the residual stream bounded, **T = 3 is solved exactly** at K = 4 — 100 % exact match in two of three cells — and Batch 02's K = 8 failure is attributed to the residual confound, not to recursion. |
+| [Batch 04](PHASE2_BATCH_04_REPORT.md) | With the fix **and** the curriculum, **T = 4 — a primary benchmark depth — is learnable** at K = 4: 87.74 % token accuracy and 12.89 % exact match. **Batch 01 §9's exclusion of the residual confound at T = 4 is withdrawn.** |
+
+So the central claim §10 was built on — that the depth axis could not be made to
+move — is false. The project has a positive result at a primary depth.
+
+**What is superseded, specifically:**
+
+* §10's working title and §1's framing ("a recursive-depth hypothesis that its own
+  benchmarks could not test").
+* §4 "Where learnability stops", which was pending Batch 02 and is now answered
+  differently than it anticipated: T = 3 is solved and T = 4 moves.
+* §5's claim that four explanations are excluded. The residual confound is **not**
+  excluded at T = 4; that exclusion is withdrawn.
+* §6's "what is left" — the objective-starvation reading survives as an
+  explanation of the *un-fixed* behaviour, but it is no longer the whole story.
+* §7's "what would answer the original question", which now has partial answers.
+* §9's point 5, that the infeasibility reading had become available.
+
+**What survives.** §2 (two benchmarks, two distinct failure modes), §3 (the A₅
+benchmark and the shortcuts at T = 2 and T = 3, now with T = 3's G2 failure
+measured), and §8 (the method and integrity record), which is strengthened rather
+than weakened: three classification defects were caught before they flattered a
+result, two predictions of mine were falsified and recorded, and a reboot
+mid-batch was recovered with its provenance disclosed.
+
+**Not rewritten yet, deliberately.** [Batch 05](PHASE2_BATCH_05_PREREG.md) is
+running and tests whether the K = 4 result is depth or compute — a question whose
+answer changes the shape of any write-up. [Batch 06](PHASE2_BATCH_06_DRAFT.md)
+would establish whether T = 4's 12.89 % is a plateau or a budget limit. Rewriting
+before those report would mean rewriting twice, and the second rewrite would be
+the one that mattered.
 
 ---
 
