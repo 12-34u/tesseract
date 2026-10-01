@@ -1,8 +1,8 @@
 # Phase 2 — Batch 06 DRAFT: T = 4 with Batch 04's two limits removed
 
-**Date: 2026-10-01. DRAFT — not pre-registered, not approved, not run.**
-**Estimated at ≈ 10.7 GPU-h, which exceeds the 8-hour threshold and needs
-explicit approval before it is pre-registered.**
+**Date: 2026-10-01. DRAFT — not yet pre-registered, not run.**
+**APPROVED at ≈ 10.7 GPU-h on 2026-10-01; the decisions are in §7, recorded
+before Batch 05 reported.**
 
 Batch 04 found T = 4 learnable at K = 4 — 87.7384 % token accuracy and 12.8906 %
 exact match in one cell — and recorded two limits that bound every number in it.
@@ -200,3 +200,52 @@ steps at an eval every 250 gives 360 points per cell), so **≈ 70 MB**.
    dropping it saves 5,000 steps per cell (~0.6 GPU-h).
 
 Nothing in this file is in force.
+
+---
+
+## 7. Decisions, recorded 2026-10-01 — before Batch 05 reported
+
+The user's decisions on §3 and §6, recorded here **while Batch 05 was still
+running and before any of its results existed.** That timing is the point: the
+Batch 06 design is fixed without knowledge of whether Batch 05 finds depth or
+compute, so it cannot have been tuned to that answer.
+
+**State of Batch 05 at the moment these were recorded**, verified from
+`runs/phase2/batch05_t3_family.console.log`:
+
+| | |
+|---|---|
+| Unit | `tesseract-chain@05`, `activating` |
+| Cells complete | **0 of 9** |
+| `t3_family_report.json` | **does not exist** |
+| In progress | arm A seed 0, step 26,750 of 35,000 |
+| Comparison outcome | not computed; no arm has a classification |
+
+(Arm A seed 0 was at 100.00 % exact match mid-run, which indicates it is
+replicating Batch 03's K = 4 cells. That is one unfinished cell of nine and is not
+a result; the §7 of the pre-registration governs how Batch 05 is read, not this.)
+
+### 7.1 The decisions
+
+| # | decision |
+|---|---|
+| 1 | **Approved at ≈ 10.7 GPU-h, full design.** T = 3 rung 15,000, target stage 60,000, K ∈ {1, 4, 8}, 3 seeds. None of §3's three reductions is taken. |
+| 2 | **No adaptive stopping rule.** §6 question 2 is answered no: a budget that depends on progress would differ across K, which would reintroduce exactly the per-K asymmetry §1.3 exists to prevent. **Fixed 90,000 steps for every cell.** Final slopes are reported, and a cell still rising at the end is reported as still rising rather than quoted as an achieved level. |
+| 3 | **Keep the 5,000-step T = 4 rung.** §6 question 3 is answered keep, for schedule comparability with Arm 3 and Batches 02–04, even though Batch 04 showed that rung achieving nothing. The 5,000 steps are spent for comparability, knowingly. |
+| 4 | **Record the two-lever limitation as drafted** (§2.1): the T = 3 rung and the target stage lengthen together, so a positive result is not attributable to either alone, and that is a limitation rather than a clean attribution. |
+
+### 7.2 What the decisions imply for the pre-registration
+
+* Total steps per cell: **90,000** — 5,000 (T=1) + 5,000 (T=2) + 15,000 (T=3) +
+  5,000 (T=4) + 60,000 (T=4 target). Boundaries at 5,000 / 10,000 / 25,000 /
+  30,000 / 90,000.
+* Estimated **≈ 10.67 GPU-h**, over the standing 8-hour threshold, approved
+  explicitly rather than by the threshold.
+* Decision 2 means the outcome table keeps §4's distinction between *"reaches a
+  plateau"* and *"still rising"* as separate rows, since there is now no mechanism
+  that forces a plateau.
+* **Batch 06 is not started while Batch 05 is running.** It is pre-registered and
+  launched after Batch 05 finishes and is reported.
+
+Nothing else in this draft changes. It becomes `PHASE2_BATCH_06_PREREG.md` with
+these decisions applied, committed before launch.
