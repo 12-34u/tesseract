@@ -53,6 +53,7 @@ LEARNABLE_BAR_PERCENT = 100 / 60 + 5.0            # 6.6667 %, the pre-registered
 BATCH_GLOBS = {
     "batch02": "runs/phase2/batch02/t3_curriculum*/t3_curriculum_report.json",
     "batch03": "runs/phase2/batch03/t3_k_sweep*/t3_k_sweep_report.json",
+    "batch04": "runs/phase2/batch04/t4_k_sweep*/t4_k_sweep_report.json",
 }
 DEFAULT_REPORT_GLOB = BATCH_GLOBS["batch02"]
 
