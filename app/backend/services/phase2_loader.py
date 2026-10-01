@@ -127,7 +127,8 @@ RECORD_DOCUMENTS = (
     ("PHASE2_BATCH_03_REPORT_NOTE_01.md", "Batch 03 report Note 01 — exact match is the informative metric", "note"),
     ("PHASE2_BATCH_04_PREREG.md", "Batch 04 pre-registration — T=4 with the fix and full curriculum", "prereg"),
     ("PHASE2_BATCH_04_REPORT.md", "Batch 04 report — T=4 learnable at K=4; Batch 01's exclusion withdrawn", "report"),
-    ("PHASE2_BATCH_05_DRAFT.md", "Batch 05 draft — compute-matched depth test (NOT pre-registered)", "draft"),
+    ("PHASE2_BATCH_05_DRAFT.md", "Batch 05 draft — superseded by its pre-registration", "draft"),
+    ("PHASE2_BATCH_05_PREREG.md", "Batch 05 pre-registration — depth or compute, at matched FLOPs", "prereg"),
     ("PHASE1_FREEZE_ERRATUM.md", "Phase 1 freeze erratum", "erratum"),
 )
 

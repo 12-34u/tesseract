@@ -10,6 +10,7 @@ schedule. The test split is never read by anything in this module.
 """
 
 import hashlib
+import types
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -340,6 +341,59 @@ def per_step_norm_parameter_cost(d_model: int, elementwise_affine: bool = False)
     return 2 * layer_norm_parameter_cost(d_model) if elementwise_affine else 0
 
 
+def _unrolled_per_step_normalised_forward(self, tokens: torch.Tensor, return_states: bool = False):
+    """UnrolledTransformer's forward with both states bounded after each block.
+
+    Byte-for-byte the same rule `PerStepNormalisedReasoner` applies, including the
+    ordering: z_H is formed from the **un-normalised** z_L and then normalised.
+    Taking z_H from the normalised z_L would be a different function, and arms A
+    and C of a cross-family comparison would then be under two different fixes,
+    which is exactly the kind of asymmetry Batch 05 exists to avoid.
+    """
+    x_emb = self.embedding(tokens)
+    b, n, d = x_emb.shape
+    z_H = self.learnable_init_H.expand(b, n, d)
+    z_L = self.learnable_init_L.expand(b, n, d)
+    history = [] if return_states else None
+    for block in self.blocks:
+        z_L_raw = block(z_L + z_H + x_emb)
+        z_H = self.alpha * z_H + (1 - self.alpha) * z_L_raw
+        # The single change, matching the shared-block family step for step.
+        z_L = self.per_step_norm_L(z_L_raw)
+        z_H = self.per_step_norm_H(z_H)
+        # No detach: full BPTT through every block, as in the unpatched family.
+        if return_states:
+            history.append({"z_H": z_H, "z_L": z_L})
+    return self.output_head(z_L), history
+
+
+def apply_per_step_norm_unrolled(model: nn.Module, elementwise_affine: bool = False) -> str:
+    """Bound both states after every block of the unrolled family.
+
+    The unrolled family has no `reasoner` to wrap — its recurrence lives in
+    `UnrolledTransformer.forward` — so the normalisation is installed on the
+    instance instead: two LayerNorms are registered as submodules and the bound
+    `forward` is replaced. Object identity, parameter identity and `state_dict`
+    are all preserved, the last because a non-affine LayerNorm holds neither
+    parameters nor buffers, so an existing checkpoint still loads.
+
+    Why this is needed: the unrolled family carries the same residual confound
+    the shared family does. Measured at medium width, L = 4, its z_L RMS grows
+    **4.98×** across the four blocks, far outside the 1.05 gate. A compute-matched
+    comparison with one arm bounded and another not would reproduce the defect
+    that invalidated Batch 02's K comparison.
+    """
+    if not hasattr(model, "blocks"):
+        raise ValueError("model has no `blocks`; the unrolled per-step norm applies to the unrolled family")
+    if hasattr(model, "per_step_norm_L"):
+        raise ValueError("per-step normalisation has already been applied to this model")
+    device = next(model.parameters()).device
+    model.per_step_norm_L = nn.LayerNorm(model.d_model, elementwise_affine=elementwise_affine).to(device)
+    model.per_step_norm_H = nn.LayerNorm(model.d_model, elementwise_affine=elementwise_affine).to(device)
+    model.forward = types.MethodType(_unrolled_per_step_normalised_forward, model)
+    return "blocks"
+
+
 def apply_per_step_norm(model: nn.Module, elementwise_affine: bool = False) -> str:
     """Replace the reasoner with the per-step-normalised one. Returns the path patched.
 
@@ -350,7 +404,14 @@ def apply_per_step_norm(model: nn.Module, elementwise_affine: bool = False) -> s
     output has unit RMS by construction at every step of training.
     """
     if not hasattr(model, "reasoner"):
-        raise ValueError("model has no `reasoner` to normalise; per-step norm applies to the shared-block family")
+        # The unrolled family keeps its recurrence in its own forward rather than
+        # in a `reasoner`, so it is normalised in place instead of by wrapping.
+        # Dispatching here rather than at every call site means a caller cannot
+        # bound one family and silently skip another.
+        if hasattr(model, "blocks"):
+            return apply_per_step_norm_unrolled(model, elementwise_affine=elementwise_affine)
+        raise ValueError("model has no `reasoner` or `blocks` to normalise; per-step norm applies to the "
+                         "shared-block and unrolled families")
     model.reasoner = PerStepNormalisedReasoner(model.reasoner, elementwise_affine=elementwise_affine)
     return "reasoner"
 
