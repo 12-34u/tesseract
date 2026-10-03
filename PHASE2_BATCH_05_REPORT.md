@@ -5,6 +5,12 @@ cells at 35,000 steps. A second invocation at 17:37:24 (the enabled unit firing
 after a reboot) correctly **skipped** because the report already existed — the
 reboot-survival design behaving as intended.
 
+> **[PHASE2_BATCH_05_REPORT_NOTE_01.md](PHASE2_BATCH_05_REPORT_NOTE_01.md)
+> (2026-10-03) records that all arms used a learning rate inherited from arm A's
+> family, so §4's "faster" is partly confounded with optimiser settings tuned for
+> arm A's scale.** No classification or number changes. Nothing below is edited;
+> this notice is the only line added after the report was committed.
+
 Report: `runs/phase2/batch05/t3_family/t3_family_report.json`.
 Curves: `runs/phase2/batch05/t3_family/curve_analysis.json`.
 Gate: `runs/phase2/batch05/t3_family/bounded_growth_gate.json`.
