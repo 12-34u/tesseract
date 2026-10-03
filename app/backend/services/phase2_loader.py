@@ -129,6 +129,7 @@ RECORD_DOCUMENTS = (
     ("PHASE2_BATCH_04_REPORT.md", "Batch 04 report — T=4 learnable at K=4; Batch 01's exclusion withdrawn", "report"),
     ("PHASE2_BATCH_05_DRAFT.md", "Batch 05 draft — superseded by its pre-registration", "draft"),
     ("PHASE2_BATCH_05_PREREG.md", "Batch 05 pre-registration — depth or compute, at matched FLOPs", "prereg"),
+    ("PHASE2_BATCH_05_REPORT.md", "Batch 05 report — shared recursion solves T=3; alternatives do not get there", "report"),
     ("PHASE2_BATCH_06_DRAFT.md", "Batch 06 draft — T=4 with Batch 04's limits removed (NOT pre-registered)", "draft"),
     ("WRITEUP_DRAFT.md", "Write-up draft — path-3 outline superseded by Batches 03-04 (§9a)", "draft"),
     ("PHASE1_FREEZE_ERRATUM.md", "Phase 1 freeze erratum", "erratum"),

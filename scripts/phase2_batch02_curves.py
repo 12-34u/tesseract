@@ -54,6 +54,7 @@ BATCH_GLOBS = {
     "batch02": "runs/phase2/batch02/t3_curriculum*/t3_curriculum_report.json",
     "batch03": "runs/phase2/batch03/t3_k_sweep*/t3_k_sweep_report.json",
     "batch04": "runs/phase2/batch04/t4_k_sweep*/t4_k_sweep_report.json",
+    "batch05": "runs/phase2/batch05/t3_family*/t3_family_report.json",
 }
 DEFAULT_REPORT_GLOB = BATCH_GLOBS["batch02"]
 
@@ -120,7 +121,10 @@ def analyse(report: dict, window: int, rising_threshold: float) -> dict:
         curve = cell.get("curve", [])
         slope = final_slope(curve, window)
         rows.append({
-            "k": cell["k"], "seed": cell["seed"],
+            # Batch 02-04 group cells by K; Batch 05 groups them by arm. Both
+            # are a single grouping key, so the field is read either way rather
+            # than duplicating the whole analysis per batch shape.
+            "k": cell.get("k", cell.get("arm")), "seed": cell["seed"],
             "best_val_token_accuracy": max((r["val_token_accuracy"] for r in curve
                                             if r.get("val_token_accuracy") is not None), default=None),
             "final_val_token_accuracy": curve[-1]["val_token_accuracy"] if curve else None,
@@ -133,7 +137,7 @@ def analyse(report: dict, window: int, rising_threshold: float) -> dict:
         })
 
     by_k = {}
-    for k in sorted({r["k"] for r in rows}):
+    for k in sorted({r["k"] for r in rows}, key=lambda v: (isinstance(v, str), v)):
         cells = [r for r in rows if r["k"] == k]
         crossed = [c for c in cells if c["crossed_shortcut_ceiling"]]
         by_k[str(k)] = {
