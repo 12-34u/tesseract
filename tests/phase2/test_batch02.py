@@ -248,3 +248,20 @@ def test_t3_validation_split_is_independent_of_the_t3_test_split():
     val_rows = {row.astype(np.uint8).tobytes() for row in val.inputs}
     assert not val_rows & {row.astype(np.uint8).tobytes() for row in test.inputs}
     assert val.sha256 != test.sha256
+
+
+def test_a_ladder_may_have_per_stage_lengths():
+    """Batch 06 needs a 15,000-step T=3 rung beside 5,000-step ones, because
+    Batch 03 measured K=1 taking 12,000 steps to pass the T=3 shortcut ceiling.
+    An int must keep every earlier caller's uniform ladder unchanged."""
+    uneven = CurriculumStream("A5", "main", 17, 8, 1729, 0, [1, 2, 3, 4], [5000, 5000, 15000, 5000], 4, 60000)
+    assert [s["ends_at_step"] for s in uneven.stage_boundaries()] == [5000, 10000, 25000, 30000, 90000]
+    assert stage_boundary_steps([1, 2, 3, 4], [5000, 5000, 15000, 5000], 60000) == [5000, 10000, 25000, 30000, 90000]
+    # An int still means a uniform ladder.
+    even = CurriculumStream("A5", "main", 17, 8, 1729, 0, [1, 2, 3], 5000, 3, 20000)
+    assert [s["ends_at_step"] for s in even.stage_boundaries()] == [5000, 10000, 15000, 35000]
+
+
+def test_a_mismatched_length_list_is_refused():
+    with pytest.raises(ValueError):
+        CurriculumStream("A5", "main", 17, 8, 1729, 0, [1, 2, 3], [5000, 5000], 3, 20000)

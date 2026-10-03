@@ -191,14 +191,16 @@ def resolved_probe_config() -> Dict:
     return dict(PROBE_CONFIG)
 
 
-def stage_boundary_steps(stages: Sequence[int], steps_per_stage: int, target_steps: int) -> List[int]:
+def stage_boundary_steps(stages: Sequence[int], steps_per_stage, target_steps: int) -> List[int]:
     """Cumulative step at which each stage ends, matching CurriculumStream.
 
     The target depth appears twice — once as the ladder's last rung and once as
     the target stage — which is how Arm 3's schedule was built, so the boundary
     list has one more entry than there are ladder stages.
     """
-    lengths = [steps_per_stage] * len(list(stages)) + [target_steps]
+    rungs = ([steps_per_stage] * len(list(stages)) if isinstance(steps_per_stage, int)
+             else list(steps_per_stage))
+    lengths = rungs + [target_steps]
     out, cumulative = [], 0
     for length in lengths:
         cumulative += length

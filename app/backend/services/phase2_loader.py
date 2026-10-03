@@ -130,7 +130,8 @@ RECORD_DOCUMENTS = (
     ("PHASE2_BATCH_05_DRAFT.md", "Batch 05 draft — superseded by its pre-registration", "draft"),
     ("PHASE2_BATCH_05_PREREG.md", "Batch 05 pre-registration — depth or compute, at matched FLOPs", "prereg"),
     ("PHASE2_BATCH_05_REPORT.md", "Batch 05 report — shared recursion solves T=3; alternatives do not get there", "report"),
-    ("PHASE2_BATCH_06_DRAFT.md", "Batch 06 draft — T=4 with Batch 04's limits removed (NOT pre-registered)", "draft"),
+    ("PHASE2_BATCH_06_DRAFT.md", "Batch 06 draft — superseded by its pre-registration", "draft"),
+    ("PHASE2_BATCH_06_PREREG.md", "Batch 06 pre-registration — T=4 with both Batch 04 limits removed", "prereg"),
     ("WRITEUP_DRAFT.md", "Write-up draft — path-3 outline superseded by Batches 03-04 (§9a)", "draft"),
     ("PHASE1_FREEZE_ERRATUM.md", "Phase 1 freeze erratum", "erratum"),
 )

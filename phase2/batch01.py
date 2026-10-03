@@ -159,9 +159,19 @@ class CurriculumStream:
     """
 
     def __init__(self, group_name: str, task: str, n: int, batch_size: int, data_seed: int, model_seed: int,
-                 stages: List[int], steps_per_stage: int, target_t: int, target_steps: int,
+                 stages: List[int], steps_per_stage, target_t: int, target_steps: int,
                  excluded_inputs=()) -> None:
-        self.schedule: List[Tuple[int, int]] = [(t, steps_per_stage) for t in stages]
+        # ``steps_per_stage`` is an int for a uniform ladder, or one length per
+        # stage. Batch 06 needs the latter: Batch 03 measured K=1 taking 12,000
+        # steps to pass the T=3 shortcut ceiling, so its T=3 rung is 15,000 while
+        # the others stay at 5,000. An int keeps every earlier caller unchanged.
+        if isinstance(steps_per_stage, int):
+            lengths = [steps_per_stage] * len(stages)
+        else:
+            lengths = list(steps_per_stage)
+            if len(lengths) != len(stages):
+                raise ValueError(f"steps_per_stage has {len(lengths)} entries for {len(stages)} stages")
+        self.schedule: List[Tuple[int, int]] = list(zip(stages, lengths))
         self.schedule.append((target_t, target_steps))
         self.streams = {
             t: TrainingStream(group_name, task, t, n, batch_size, data_seed, model_seed,
