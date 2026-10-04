@@ -55,6 +55,7 @@ BATCH_GLOBS = {
     "batch03": "runs/phase2/batch03/t3_k_sweep*/t3_k_sweep_report.json",
     "batch04": "runs/phase2/batch04/t4_k_sweep*/t4_k_sweep_report.json",
     "batch05": "runs/phase2/batch05/t3_family*/t3_family_report.json",
+    "batch06": "runs/phase2/batch06/t4_long*/t4_long_report.json",
 }
 DEFAULT_REPORT_GLOB = BATCH_GLOBS["batch02"]
 
