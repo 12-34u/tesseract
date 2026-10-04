@@ -4,6 +4,13 @@
 steps. Runtime 12 h 13 min 13 s against a pre-registered estimate of
 ≈ 10.67 GPU-h; actual **12.22 GPU-h**, 15 % over (§8).
 
+> **[PHASE2_BATCH_06_REPORT_NOTE_01.md](PHASE2_BATCH_06_REPORT_NOTE_01.md)
+> (2026-10-04) diagnoses the K = 4 collapse from the existing logs: the transition
+> shock is universal at every K, the output collapse is near-universal, and the
+> discriminator is whether a cell ever gets below chance loss. The collapse is a
+> symptom of a chance plateau, not its cause.** No number or classification
+> changes. Nothing below is edited; this notice is the only line added.
+
 Report: `runs/phase2/batch06/t4_long/t4_long_report.json`.
 Curves: `runs/phase2/batch06/t4_long/curve_analysis.json`.
 Gate: `runs/phase2/batch06/t4_long/bounded_growth_gate.json`.

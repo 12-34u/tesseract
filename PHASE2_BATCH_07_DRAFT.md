@@ -3,6 +3,14 @@
 **Date: 2026-10-03. DRAFT — not pre-registered, not approved, not run.**
 **Estimated at ≈ 10.8 GPU-h, over the 8-hour threshold; needs approval.**
 
+> **SUPERSEDED as the next batch on 2026-10-04 by
+> [PHASE2_BATCH_07_T4_DRAFT.md](PHASE2_BATCH_07_T4_DRAFT.md)**, which asks the
+> depth-versus-compute question at T = 4 — a primary benchmark depth — after
+> [Batch 06](PHASE2_BATCH_06_REPORT.md) solved T = 4 at K = 8. **Not abandoned:**
+> this is the cheap way to answer the learning-rate question the T = 4 draft drops
+> (its §5), and it would settle whether Batch 05's gap is convergence or
+> capability. Nothing below is edited; this notice is the only line added.
+
 [Batch 05](PHASE2_BATCH_05_REPORT.md) found the shared recursion (arm A) solving
 T = 3 exactly while the compute-matched alternatives produced almost no correct
 rings — but its comparison returned `UNRESOLVED_ESCALATE`, for two reasons
