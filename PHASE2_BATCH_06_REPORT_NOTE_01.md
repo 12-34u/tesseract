@@ -81,7 +81,13 @@ against chance = **4.0943**:
 | K = 8 s2 | **0.0395** | yes | **84.1309 %** |
 
 The split is exact and binary. **Every cell that got below chance went on to learn
-something; no cell that failed to ever did — in 60,000 steps.** The five failing
+something; no cell that failed to ever did — in 60,000 steps.**
+
+**This describes the learned/not-learned split precisely and is not itself a
+mechanism.** "Never got below chance" and "never learned" are close to the same
+statement about a cross-entropy objective, so the criterion separates the cells
+cleanly without explaining anything: the open question is why K = 8 escapes the
+plateau and K = 4 does not, and §6 is what would be needed to answer it. The five failing
 cells' minimum is 4.0952–4.0953, which is *above* ln 60 by 0.0009: they approach
 the uniform baseline from above and stop there.
 
