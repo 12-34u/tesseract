@@ -12,6 +12,99 @@ import { KeyFindings } from '../components/KeyFindings';
 import { StatusPanel } from '../components/StatusPanel';
 import { RawDataModal } from '../components/RawDataModal';
 import { Phase2Section } from '../components/Phase2Section';
+import {
+  batch07ReportExists,
+  completedMilestones,
+  keyStats,
+  limitations,
+  parameterGroups,
+  projectMilestones,
+} from '../data/projectStatus';
+
+function sourceHref(source) {
+  return `${API_BASE_URL}/api/source/${source}`;
+}
+
+function SourceLink({ source }) {
+  return (
+    <a className="dashboard-source" href={sourceHref(source)} target="_blank" rel="noreferrer">
+      {source}
+    </a>
+  );
+}
+
+function ProjectStatusPanel() {
+  return (
+    <section className="dashboard-panel card">
+      <div className="card-title">
+        Project Status
+        <span className="status-count">{completedMilestones} of {projectMilestones.length} milestones done</span>
+      </div>
+      <div className="milestone-list">
+        {projectMilestones.map((milestone) => (
+          <div className="milestone-row" key={milestone.label}>
+            <span className={`milestone-status milestone-${milestone.status.toLowerCase().replace(' ', '-')}`}>{milestone.status}</span>
+            <span className="milestone-label">{milestone.label}</span>
+            <SourceLink source={milestone.source} />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function KeyStatsPanel() {
+  return (
+    <section className="dashboard-panel card">
+      <div className="card-title">Key Stats</div>
+      <div className="stat-list">
+        {keyStats.map(([value, label, source]) => (
+          <div className="stat-row" key={`${value}-${label}`}>
+            <strong>{value}</strong>
+            <span>{label}</span>
+            <SourceLink source={source} />
+          </div>
+        ))}
+        <div className="stat-row stat-pending">
+          <strong>{batch07ReportExists ? 'reported' : 'pending'}</strong>
+          <span>Batch 07 results</span>
+          <SourceLink source="PHASE2_BATCH_07_PREREG.md" />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ParametersPanel() {
+  return (
+    <section className="dashboard-panel card">
+      <div className="card-title">Parameters</div>
+      {parameterGroups.map((group) => (
+        <div className="parameter-group" key={group.title}>
+          <h3>{group.title}</h3>
+          {group.rows.map(([name, value, source]) => (
+            <div className="parameter-row" key={`${group.title}-${name}`}>
+              <span>{name}</span>
+              <strong>{value}</strong>
+              <SourceLink source={source} />
+            </div>
+          ))}
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function LimitationsPanel() {
+  return (
+    <section className="dashboard-panel card">
+      <div className="card-title">Limitations</div>
+      <ul className="limitations-list">
+        {limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}
+      </ul>
+    </section>
+  );
+}
 
 const ENDPOINTS = [
   ['summary', api.getSummary],
@@ -162,6 +255,12 @@ export function Dashboard() {
 
           {selectedExperiment === 'overview' && (
             <>
+              <div className="dashboard-overview-grid">
+                <ProjectStatusPanel />
+                <KeyStatsPanel />
+                <ParametersPanel />
+                <LimitationsPanel />
+              </div>
               <ArchitectureCard summary={summary} crucible={crucible} />
               <KeyFindings findings={summary?.findings} />
               <StatusPanel experiments={summary?.experiments} />

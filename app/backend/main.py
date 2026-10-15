@@ -12,9 +12,11 @@ Environment:
 
 import os
 import time
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from services.phase2_loader import Phase2Loader
 from services.results_loader import ResultsLoader
@@ -120,3 +122,15 @@ def get_phase2_results():
 def get_phase2_diagnostics():
     """Probes A/B, Batch 01's arms and Batch 02's T=3 probe, with the record."""
     return phase2.get_diagnostics()
+
+
+@app.get("/api/source/{source_path:path}")
+def get_source_report(source_path: str):
+    """Serve a committed Markdown source linked from the dashboard overview."""
+    repo_root = Path(__file__).resolve().parents[2]
+    candidate = (repo_root / source_path).resolve()
+    if candidate.parent != repo_root or candidate.suffix != ".md":
+        raise HTTPException(status_code=404, detail="Source report not found")
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="Source report not found")
+    return FileResponse(candidate, media_type="text/markdown")
